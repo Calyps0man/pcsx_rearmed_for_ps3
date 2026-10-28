@@ -1326,5 +1326,13 @@ void SysPrintf(const char *fmt, ...)
 // vim:shiftwidth=2:expandtab
 
 struct gpu_frontend_hooks gpu_frontend_hooks;
+int gpulib_pending_write(int *x, int *y, int *w, int *h)
+{
+  if (!gpu.dma.h || gpu.dma_start.is_read)
+    return 0;
+  *x = gpu.dma_start.x; *y = gpu.dma_start.y; *w = gpu.dma_start.w; *h = gpu.dma_start.h;
+  return 1;
+}
+
 const uint16_t *gpulib_get_vram(void) { return gpu.vram; }
 const uint32_t *gpulib_get_ex_regs(void) { return gpu.ex_regs; }

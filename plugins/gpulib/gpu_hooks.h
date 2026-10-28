@@ -34,6 +34,9 @@ const uint32_t *gpulib_get_ex_regs(void);
  * without USE_ASYNC_GPU. Off while front-end hooks are installed: they are
  * called from wherever the renderer runs. */
 void gpulib_set_thread_rendering(int on);
+/* a CPU->VRAM transfer is in progress (it may span several frames): its rect
+ * already holds newer data in the core's VRAM than a front-end copy has */
+int gpulib_pending_write(int *x, int *y, int *w, int *h);
 
 /* time spent on the emulation thread, in timebase ticks (PowerPC only):
  * [0] GPU command processing and frame output (incl. waits for the GPU thread),
