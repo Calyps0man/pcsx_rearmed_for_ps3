@@ -88,6 +88,17 @@ static int iq_y[DSIZE2], iq_uv[DSIZE2];
 
 #define STP_A ((mdec.reg0 & MDEC0_STP) ? 0x8000 : 0)
 
+int (*mdec_decode_hook)(const unsigned short **rl, unsigned char *image, int n,
+		int rgb24, int stp, int bw, const int *iq_y, const int *iq_uv);
+void (*mdec_stream_hook)(const unsigned short *rl, const unsigned short *rl_end,
+		int rgb24, int stp, int bw, const int *iq_y, const int *iq_uv);
+
+static void stream_forget(void)
+{
+	if (mdec_stream_hook)
+		mdec_stream_hook(NULL, NULL, 0, 0, 0, NULL, NULL);
+}
+
 
 static int aanscales[DSIZE2] = {
 	1048576, 1454417, 1370031, 1232995, 1048576,  823861, 567485, 289301,
@@ -114,6 +125,7 @@ void mdecInit(void) {
 	memset(iq_y, 0, sizeof(iq_y));
 	memset(iq_uv, 0, sizeof(iq_uv));
 	mdec.rl = (u16 *)&psxRegs.ptrs.psxM[0x100000];
+	stream_forget();
 }
 
 // command register
@@ -132,6 +144,7 @@ void mdecWrite1(u32 data) {
 		mdec.reg1 = 0;
 		mdec.pending_dma1.adr = 0;
 		mdec.block_buffer_pos = 0;
+		stream_forget();
 	}
 }
 
@@ -174,6 +187,10 @@ void psxDma0(u32 adr, u32 bcr, u32 chcr) {
 			/* sanity check */
 			if(mdec.rl_end <= mdec.rl)
 				break;
+
+			if (mdec_stream_hook)
+				mdec_stream_hook(mdec.rl, mdec.rl_end, !(cmd & MDEC0_RGB24),
+					(cmd & MDEC0_STP) ? 0x8000 : 0, Config.Mdec, iq_y, iq_uv);
 
 			/* process the pending dma1 */
 			if(mdec.pending_dma1.adr){
@@ -265,6 +282,13 @@ void psxDma1(u32 adr, u32 bcr, u32 chcr) {
 			mdec.block_buffer_pos = 0;
 		}
 
+		if (mdec_decode_hook && size >= SIZE_OF_16B_BLOCK) {
+			int n = mdec_decode_hook(&mdec.rl, image, size / SIZE_OF_16B_BLOCK,
+						 0, STP_A, Config.Mdec, iq_y, iq_uv);
+			image += n * SIZE_OF_16B_BLOCK;
+			size -= n * SIZE_OF_16B_BLOCK;
+		}
+
 		while(size >= SIZE_OF_16B_BLOCK) {
 			mdec.rl = rl2blk(blk, mdec.rl, iq_y, iq_uv);
 			yuv2rgb15(blk, (u16 *)image, STP_A, Config.Mdec);
@@ -292,6 +316,13 @@ void psxDma1(u32 adr, u32 bcr, u32 chcr) {
 			image += n;
 			size -= n;
 			mdec.block_buffer_pos = 0;
+		}
+
+		if (mdec_decode_hook && size >= SIZE_OF_24B_BLOCK) {
+			int n = mdec_decode_hook(&mdec.rl, image, size / SIZE_OF_24B_BLOCK,
+						 1, 0, Config.Mdec, iq_y, iq_uv);
+			image += n * SIZE_OF_24B_BLOCK;
+			size -= n * SIZE_OF_24B_BLOCK;
 		}
 
 		while(size >= SIZE_OF_24B_BLOCK) {
@@ -386,6 +417,7 @@ int mdecFreeze(void *f, int Mode) {
 	gzfreeze(&mdec.pending_dma1, sizeof(mdec.pending_dma1));
 	gzfreeze(iq_y, sizeof(iq_y));
 	gzfreeze(iq_uv, sizeof(iq_uv));
+	stream_forget();
 
 	return 0;
 }

@@ -40,6 +40,18 @@ void mdec0Interrupt();
 void mdec1Interrupt();
 int mdecFreeze(void *f, int Mode);
 
+/* Optional: a front end can decode whole macroblocks elsewhere (the PS3 SPUs)
+ * with the routines in mdec_decode.h. Decodes up to n macroblocks from *rl into
+ * image (16 bpp: 512 bytes each, 24 bpp: 768), advances *rl and returns how
+ * many it decoded; 0 leaves them to the core. stp: 0x8000 or 0, bw: monochrome. */
+extern int (*mdec_decode_hook)(const unsigned short **rl, unsigned char *image, int n,
+		int rgb24, int stp, int bw, const int *iq_y, const int *iq_uv);
+/* Optional: told when decoding of a run-length stream starts (rl..rl_end, the
+ * game leaves that RAM alone until the MDEC has consumed it), so the front end
+ * can decode ahead; rl NULL: forget any stream (reset, savestate load). */
+extern void (*mdec_stream_hook)(const unsigned short *rl, const unsigned short *rl_end,
+		int rgb24, int stp, int bw, const int *iq_y, const int *iq_uv);
+
 #ifdef __cplusplus
 }
 #endif
