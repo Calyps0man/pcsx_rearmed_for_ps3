@@ -1291,7 +1291,10 @@ _emit_code(jit_state_t *_jit)
     for (node = _jitc->head; node; node = node->next)
 	if (node->code != jit_code_label &&
 	    node->code != jit_code_note &&
-	    node->code != jit_code_name)
+	    node->code != jit_code_name &&
+	    /* emits no code; Lightrec puts one before jit_prolog() when it
+	     * preloads the PC, which must not hide an assume_frame prolog */
+	    node->code != jit_code_live)
 	    break;
     if (node && (node->code != jit_code_prolog ||
 		 !(_jitc->functions.ptr + node->w.w)->assume_frame)) {
@@ -2306,7 +2309,21 @@ _emit_code(jit_state_t *_jit)
 void
 jit_flush(void *fptr, void *tptr)
 {
-#if defined(__GNUC__)
+#if defined(__lv2ppu__)
+    /* The PS3 toolchain's __clear_cache() is an empty function, so the new
+     * code would sit in the data cache while the CPU fetches stale
+     * instructions. Write back the data cache lines and invalidate the
+     * instruction cache lines by hand (Cell PPU lines are 128 bytes). */
+    jit_word_t		f, t, a;
+    f = (jit_word_t)fptr & -128;
+    t = (jit_word_t)tptr;
+    for (a = f; a < t; a += 128)
+	__asm__ __volatile__ ("dcbst 0,%0" : : "r"(a) : "memory");
+    __asm__ __volatile__ ("sync" : : : "memory");
+    for (a = f; a < t; a += 128)
+	__asm__ __volatile__ ("icbi 0,%0" : : "r"(a) : "memory");
+    __asm__ __volatile__ ("sync\n\tisync" : : : "memory");
+#elif defined(__GNUC__)
     jit_word_t		f, t, s;
 
     s = sysconf(_SC_PAGE_SIZE);

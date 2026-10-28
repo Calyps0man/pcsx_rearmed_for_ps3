@@ -70,6 +70,15 @@ Rcnt rcnts[4];
 
 void* code_buffer;
 
+#if defined(__lv2ppu__)
+/* The PS3 OS only lets a game execute code from its own loaded image, and that
+ * image's text pages stay writable at run time. So the dynarec's code buffer
+ * is reserved inside .text. (The "#" ends the section flags gcc emits, which
+ * would otherwise clash with .text's.) */
+static unsigned char ps3_code_buffer[CODE_BUFFER_SIZE]
+	__attribute__((aligned(4096), used, section(".text.lightrec_code #")));
+#endif
+
 static struct lightrec_state *lightrec_state;
 
 static bool use_lightrec_interpreter;
@@ -395,7 +404,9 @@ static int lightrec_plugin_init(void)
 	lightrec_map[PSX_MAP_PARALLEL_PORT].address = psxRegs.ptrs.psxP;
 
 	if (!LIGHTREC_CUSTOM_MAP) {
-#if P_HAVE_MMAP
+#if defined(__lv2ppu__)
+		code_buffer = ps3_code_buffer;
+#elif P_HAVE_MMAP
 		code_buffer = mmap(0, CODE_BUFFER_SIZE,
 				   PROT_EXEC | PROT_READ | PROT_WRITE,
 				   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -693,7 +704,9 @@ static void lightrec_plugin_shutdown(void)
 	lightrec_destroy(lightrec_state);
 
 	if (!LIGHTREC_CUSTOM_MAP) {
-#if P_HAVE_MMAP
+#if defined(__lv2ppu__)
+		/* static buffer in .text: nothing to free */
+#elif P_HAVE_MMAP
 		munmap(code_buffer, CODE_BUFFER_SIZE);
 #else
 		free(code_buffer);
