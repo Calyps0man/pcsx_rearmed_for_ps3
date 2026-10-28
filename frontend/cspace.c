@@ -179,7 +179,11 @@ void bgr888_to_rgb888(void * __restrict__ dst_,
 
 static inline uint32_t bgr555_to_xrgb8888_one(uint16_t p)
 {
-	uint32_t t = ((p << 19) | (p >> 7)) & 0xf800f8;
+	uint32_t t;
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+	p = SWAP16(p);	/* VRAM is little-endian, like the rgb565 paths assume */
+#endif
+	t = ((p << 19) | (p >> 7)) & 0xf800f8;
 	t |= (p << 6) & 0xf800;
 	return t | ((t >> 5) & 0x070707);
 }
