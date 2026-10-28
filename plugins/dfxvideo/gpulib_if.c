@@ -333,6 +333,10 @@ int renderer_do_cmd_list(uint32_t *list, int list_len, uint32_t *ex_regs,
     if (!(gpu_frontend_hooks.cmd && (cmd == 0x02 || (cmd >= 0x20 && cmd < 0x80) || (cmd >= 0xe1 && cmd <= 0xe6))
           && gpu_frontend_hooks.cmd(list, list_end) && cmd < 0x80))
       primTableJ[cmd]((void *)list);
+    else if ((cmd & 0xe4) == 0x24)
+      /* textured polygon drawn by the front end: keep its texture-page side effect
+         (GPUSTAT bits 0-8, the state later sprites and E1 syncs start from) */
+      UpdateGlobalTP((unsigned short)(GETLE32(&list[4 + ((cmd >> 4) & 1)]) >> 16));
 
     switch(cmd)
     {
