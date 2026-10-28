@@ -328,10 +328,11 @@ int renderer_do_cmd_list(uint32_t *list, int list_len, uint32_t *ex_regs,
       ex_regs[cmd & 7] = GETLE32(list);
 #endif
 
-    if (gpu_frontend_hooks.cmd && (cmd == 0x02 || (cmd >= 0x20 && cmd < 0x80) || (cmd >= 0xe1 && cmd <= 0xe6)))
-      gpu_frontend_hooks.cmd(list, list_end);
-
-    primTableJ[cmd]((void *)list);
+    /* the length and cycle bookkeeping below still runs for commands the
+       front-end drew itself; only the software drawing is skipped */
+    if (!(gpu_frontend_hooks.cmd && (cmd == 0x02 || (cmd >= 0x20 && cmd < 0x80) || (cmd >= 0xe1 && cmd <= 0xe6))
+          && gpu_frontend_hooks.cmd(list, list_end) && cmd < 0x80))
+      primTableJ[cmd]((void *)list);
 
     switch(cmd)
     {

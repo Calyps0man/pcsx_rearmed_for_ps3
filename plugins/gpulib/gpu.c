@@ -588,7 +588,10 @@ static noinline void start_vram_transfer(struct psx_gpu *gpu, uint32_t pos_word,
   //sync_renderer(gpu);
 
   if (is_read) {
-    const uint16_t *mem = VRAM_MEM_XY(gpu->vram, gpu->dma.x, gpu->dma.y);
+    const uint16_t *mem;
+    if (gpu_frontend_hooks.vram_read)
+      gpu_frontend_hooks.vram_read(gpu->dma.x, gpu->dma.y, gpu->dma.w, gpu->dma.h);
+    mem = VRAM_MEM_XY(gpu->vram, gpu->dma.x, gpu->dma.y);
     gpu->status |= PSX_GPU_STATUS_IMG;
     // XXX: wrong for width 1
     gpu->gp0 = LE16TOH(mem[0]) | ((uint32_t)LE16TOH(mem[1]) << 16);
@@ -658,6 +661,8 @@ int do_vram_copy(uint16_t *vram, const uint32_t *ex_regs, const uint32_t *params
   uint32_t x, y;
 
   renderer_flush_queues();
+  if (gpu_frontend_hooks.vram_read)
+    gpu_frontend_hooks.vram_read(sx, sy, w, h);
 
   if (unlikely((sx < dx && dx < sx + w) || sx + w > 1024 || dx + w > 1024 || msb))
   {
@@ -1122,6 +1127,8 @@ long GPUfreeze(uint32_t type, GPUFreeze_t *freeze, uint16_t **vram_ptr)
       }
 
       sync_renderer(&gpu);
+      if (gpu_frontend_hooks.vram_read)
+        gpu_frontend_hooks.vram_read(0, 0, 1024, 512);
       memcpy(freeze->ulControl, gpu.regs, sizeof(gpu.regs));
       memcpy(freeze->ulControl + 0xe0, gpu.ex_regs, sizeof(gpu.ex_regs));
       freeze->ulStatus = gpu.status;
