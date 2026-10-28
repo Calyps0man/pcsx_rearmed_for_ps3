@@ -561,6 +561,30 @@ static u32 gteMAC123f(psxCP2Regs *regs, s32 vx, s32 vy, s32 vz,
 
 #endif
 
+/* The matrix and vector helpers index GTE registers as flat s16 arrays, which is
+ * only the register order on little-endian hosts: on big-endian the two halves of
+ * every 32-bit register are swapped in memory. These make an in-order copy there. */
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+/* m and v point at the first element (&reg.sw.l), which on big-endian is the
+   second s16 of its 32-bit register: w is the register start */
+static inline const s16 *mx_inorder(const s16 *m, s16 *tmp)
+{
+	const s16 *w = m - 1;
+	int i;
+	for (i = 0; i < 9; i++) tmp[i] = w[i ^ 1];
+	return tmp;
+}
+static inline const s16 *v_inorder(const s16 *v, s16 *tmp)
+{
+	const s16 *w = v - 1;
+	tmp[0] = w[1]; tmp[1] = w[0]; tmp[2] = w[3];
+	return tmp;
+}
+#else
+#define mx_inorder(m, tmp) (m)
+#define v_inorder(v, tmp) (v)
+#endif
+
 static inline force_inline void gteRTPS(psxCP2Regs *regs, int shift, int lm)
 {
 	s32 vx = gteVX0, vy = gteVY0, vz = gteVZ0;
@@ -696,13 +720,17 @@ static inline force_inline void gteMVMVA(psxCP2Regs *regs,
 	const s16 *mxp = &regs->CP2C.p[mx << 3].sw.l;
 	const s32 *cvp = (s32 *)&regs->CP2C.r[(cv << 3) + 5];
 	const s32 cv3[3] = { 0, 0, 0 };
-	s16 mx3[9];
+	s16 mx3[9], mxo[9], vo[3];
 
 	GTE_LOG("GTE MVMVA\n");
 
 	if (v == 3)
 		vp = v3;
-	if (unlikely(mx == 3)) {
+	else
+		vp = v_inorder(vp, vo);
+	if (likely(mx != 3))
+		mxp = mx_inorder(mxp, mxo);
+	else {
 		mxp = mx3;
 		mx3[0] = -regs->CP2D.p[6].b.l << 4;
 		mx3[1] =  regs->CP2D.p[6].b.l << 4;
@@ -805,7 +833,8 @@ static inline force_inline void runColor1(psxCP2Regs *regs, u32 *flags, int shif
 	ir1 = limB1(flags, mac1, lm);
 	ir2 = limB2(flags, mac2, lm);
 	ir3 = limB3(flags, mac3, lm);
-	*flags |= gteMAC123f(regs, ir1, ir2, ir3, &gteLR1, &gteRBK, shift);
+	s16 lcm[9];
+	*flags |= gteMAC123f(regs, ir1, ir2, ir3, mx_inorder(&gteLR1, lcm), &gteRBK, shift);
 	mac1 = gteMAC1;
 	mac2 = gteMAC2;
 	mac3 = gteMAC3;
@@ -1068,7 +1097,8 @@ static inline void runColor3(psxCP2Regs *regs, int shift, int lm, int is_cdp)
 	s32 ir1, ir2, ir3;
 	u32 flags;
 
-	flags = gteMAC123f(regs, gteIR1, gteIR2, gteIR3, &gteLR1, &gteRBK, shift);
+	s16 lcm[9];
+	flags = gteMAC123f(regs, gteIR1, gteIR2, gteIR3, mx_inorder(&gteLR1, lcm), &gteRBK, shift);
 	ir1 = limB1(&flags, gteMAC1, lm);
 	ir2 = limB2(&flags, gteMAC2, lm);
 	ir3 = limB3(&flags, gteMAC3, lm);
