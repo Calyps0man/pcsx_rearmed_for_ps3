@@ -829,7 +829,7 @@ void gpu_async_sync_ecmds(struct psx_gpu *gpu)
 #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
   uint32_t i, ecmds[8];
   for (i = 1; i <= 6; i++)
-    ecmds[i] = HTOLE32(ecmds_[i]);
+    ecmds[i] = HTOLE32(gpu->ex_regs[i]);
 #else
   const uint32_t *ecmds = gpu->ex_regs;
 #endif

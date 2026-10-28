@@ -929,7 +929,25 @@ static noinline void flush_cmd_buffer(struct psx_gpu *gpu)
   }
 }
 
+uint64_t gpulib_prof_ticks[2];
+
+void gpulib_set_thread_rendering(int on)
+{
+#ifdef USE_ASYNC_GPU
+  gpu_async_enable(&gpu, on);
+#endif
+  (void)on;
+}
+
+static void GPUwriteDataMem_(uint32_t *mem, int count);
 void GPUwriteDataMem(uint32_t *mem, int count)
+{
+  uint64_t t0 = gpulib_prof_now();
+  GPUwriteDataMem_(mem, count);
+  gpulib_prof_ticks[0] += gpulib_prof_now() - t0;
+}
+
+static void GPUwriteDataMem_(uint32_t *mem, int count)
 {
   int dummy = 0, left;
 
@@ -955,7 +973,18 @@ void GPUwriteData(uint32_t data)
   }
 }
 
+static long GPUdmaChain_(uint32_t *rambase, uint32_t start_addr,
+  uint32_t *progress_addr, int32_t *cycles_last_cmd);
 long GPUdmaChain(uint32_t *rambase, uint32_t start_addr,
+  uint32_t *progress_addr, int32_t *cycles_last_cmd)
+{
+  uint64_t t0 = gpulib_prof_now();
+  long r = GPUdmaChain_(rambase, start_addr, progress_addr, cycles_last_cmd);
+  gpulib_prof_ticks[0] += gpulib_prof_now() - t0;
+  return r;
+}
+
+static long GPUdmaChain_(uint32_t *rambase, uint32_t start_addr,
   uint32_t *progress_addr, int32_t *cycles_last_cmd)
 {
   uint32_t addr, *list, ld_addr;
@@ -1115,7 +1144,15 @@ long GPUfreeze(uint32_t type, GPUFreeze_t *freeze, uint16_t **vram_ptr)
   return 1;
 }
 
+static void GPUupdateLace_(void);
 static void GPUupdateLace(void)
+{
+  uint64_t t0 = gpulib_prof_now();
+  GPUupdateLace_();
+  gpulib_prof_ticks[0] += gpulib_prof_now() - t0;
+}
+
+static void GPUupdateLace_(void)
 {
   int delay_vout_update = 0;
   int updated = 1;

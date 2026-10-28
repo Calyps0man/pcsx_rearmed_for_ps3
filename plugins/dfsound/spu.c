@@ -997,7 +997,16 @@ static const void * const worker = NULL;
 // here is the main job handler...
 ////////////////////////////////////////////////////////////////////////
 
+#include "../gpulib/gpu_hooks.h"
+static void do_samples_(unsigned int cycles_to, int force_no_thread);
 void do_samples(unsigned int cycles_to, int force_no_thread)
+{
+ uint64_t t0 = gpulib_prof_now();
+ do_samples_(cycles_to, force_no_thread);
+ gpulib_prof_ticks[1] += gpulib_prof_now() - t0;
+}
+
+static void do_samples_(unsigned int cycles_to, int force_no_thread)
 {
  unsigned int silentch;
  int cycle_diff;
