@@ -300,6 +300,7 @@ void renderer_notify_screen_change(const struct psx_gpu_screen *screen)
 }
 
 #include "../gpulib/gpu_timing.h"
+#include "../gpulib/gpu_hooks.h"
 extern const unsigned char cmd_lengths[256];
 
 int renderer_do_cmd_list(uint32_t *list, int list_len, uint32_t *ex_regs,
@@ -326,6 +327,9 @@ int renderer_do_cmd_list(uint32_t *list, int list_len, uint32_t *ex_regs,
     else if ((cmd & 0xf8) == 0xe0)
       ex_regs[cmd & 7] = GETLE32(list);
 #endif
+
+    if (gpu_frontend_hooks.cmd && (cmd == 0x02 || (cmd >= 0x20 && cmd < 0x80) || (cmd >= 0xe1 && cmd <= 0xe6)))
+      gpu_frontend_hooks.cmd(list, list_end);
 
     primTableJ[cmd]((void *)list);
 
@@ -450,10 +454,14 @@ void renderer_sync_ecmds(uint32_t *ecmds_)
   cmdDrawAreaEnd((unsigned char *)&ecmds[4]);
   cmdDrawOffset((unsigned char *)&ecmds[5]);
   cmdSTP((unsigned char *)&ecmds[6]);
+  if (gpu_frontend_hooks.sync_ecmds)
+    gpu_frontend_hooks.sync_ecmds(ecmds_);
 }
 
 void renderer_update_caches(int x, int y, int w, int h, int state_changed)
 {
+  if (gpu_frontend_hooks.vram_written)
+    gpu_frontend_hooks.vram_written(x, y, w, h);
 }
 
 void renderer_flush_queues(void)

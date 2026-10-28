@@ -11,6 +11,7 @@
 
 #include <string.h>
 #include "gpu.h"
+#include "gpu_hooks.h"
 #include "../../frontend/plugin_lib.h"
 
 static const struct rearmed_cbs *cbs;
@@ -103,6 +104,12 @@ int vout_update(struct psx_gpu *gpu, int src_x, int src_y)
   // gpu_unai skips drawing odd lines
   if (h > 256 && gpu->state.downscale_enable && (src_y & 1))
     src_y++;
+
+  if (gpu_frontend_hooks.present && !gpu->state.enhancement_active && src_y + h <= vram_h
+      && gpu_frontend_hooks.present(src_x + src_x2, src_y, w, h, bpp == 24)) {
+    gpu->state.dims_changed = 0;
+    return 1;
+  }
 
   offset = (src_y * 1024 + src_x) * 2;
   offset += src_x2 * bpp / 8;

@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "gpu.h"
+#include "gpu_hooks.h"
 #include "gpu_timing.h"
 #include "gpu_async.h"
 #include "../../libpcsxcore/gpu.h" // meh
@@ -1279,3 +1280,7 @@ void SysPrintf(const char *fmt, ...)
 #endif
 
 // vim:shiftwidth=2:expandtab
+
+struct gpu_frontend_hooks gpu_frontend_hooks;
+const uint16_t *gpulib_get_vram(void) { return gpu.vram; }
+const uint32_t *gpulib_get_ex_regs(void) { return gpu.ex_regs; }
