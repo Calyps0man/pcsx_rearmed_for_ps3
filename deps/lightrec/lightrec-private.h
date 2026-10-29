@@ -225,11 +225,16 @@ enum {
 	LR_PRECOMPILE, LR_C_RW, LR_C_RW_GENERIC, LR_C_MFC, LR_C_MTC, LR_C_CP,
 	LR_C_MEMSET, LR_C_LOAD_DELAY,
 };
+/* only with the front end's debug log on (psx_debug_trace, set when a game starts) */
+extern int psx_debug_trace;
 #define LR_DBG_ENTER(w, p, a) \
-	u32 lr_dbg_w = lightrec_dbg.where, lr_dbg_p = lightrec_dbg.pc, lr_dbg_a = lightrec_dbg.arg; \
-	lightrec_dbg.where = (w); lightrec_dbg.pc = (p); lightrec_dbg.arg = (a)
+	u32 lr_dbg_w = 0, lr_dbg_p = 0, lr_dbg_a = 0; \
+	if (psx_debug_trace) { \
+		lr_dbg_w = lightrec_dbg.where; lr_dbg_p = lightrec_dbg.pc; lr_dbg_a = lightrec_dbg.arg; \
+		lightrec_dbg.where = (w); lightrec_dbg.pc = (p); lightrec_dbg.arg = (a); \
+	}
 #define LR_DBG_LEAVE() \
-	(lightrec_dbg.where = lr_dbg_w, lightrec_dbg.pc = lr_dbg_p, lightrec_dbg.arg = lr_dbg_a)
+	do { if (psx_debug_trace) { lightrec_dbg.where = lr_dbg_w; lightrec_dbg.pc = lr_dbg_p; lightrec_dbg.arg = lr_dbg_a; } } while (0)
 
 const struct lightrec_mem_map *
 lightrec_get_map(struct lightrec_state *state, void **host, u32 kaddr);

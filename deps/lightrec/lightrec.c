@@ -428,7 +428,7 @@ static void lightrec_rw_helper(struct lightrec_state *state,
 static void lightrec_rw_cb(struct lightrec_state *state, u32 arg)
 {
 	LR_DBG_ENTER(LR_C_RW, state->curr_pc, arg);
-	lightrec_dbg.n_c++;
+	if (psx_debug_trace) lightrec_dbg.n_c++;
 	lightrec_rw_helper(state, (union code) arg, NULL, NULL, 0);
 	LR_DBG_LEAVE();
 }
@@ -438,7 +438,7 @@ static void lightrec_rw_generic_cb_(struct lightrec_state *state, u32 arg);
 static void lightrec_rw_generic_cb(struct lightrec_state *state, u32 arg)
 {
 	LR_DBG_ENTER(LR_C_RW_GENERIC, state->curr_pc, arg);
-	lightrec_dbg.n_c++;
+	if (psx_debug_trace) lightrec_dbg.n_c++;
 	lightrec_rw_generic_cb_(state, arg);
 	LR_DBG_LEAVE();
 }
@@ -557,7 +557,7 @@ u32 lightrec_mfc(struct lightrec_state *state, union code op)
 static void lightrec_mfc_cb(struct lightrec_state *state, union code op)
 {
 	LR_DBG_ENTER(LR_C_MFC, state->curr_pc, op.opcode);
-	lightrec_dbg.n_c++;
+	if (psx_debug_trace) lightrec_dbg.n_c++;
 	u32 rt = lightrec_mfc(state, op);
 
 	if (op.i.op == OP_SWC2)
@@ -690,7 +690,7 @@ void lightrec_mtc(struct lightrec_state *state, union code op, u8 reg, u32 data)
 static void lightrec_mtc_cb(struct lightrec_state *state, u32 arg)
 {
 	LR_DBG_ENTER(LR_C_MTC, state->curr_pc, arg);
-	lightrec_dbg.n_c++;
+	if (psx_debug_trace) lightrec_dbg.n_c++;
 	union code op = (union code) arg;
 	u32 data;
 	u8 reg;
@@ -734,7 +734,7 @@ void lightrec_cp(struct lightrec_state *state, union code op)
 static void lightrec_cp_cb(struct lightrec_state *state, u32 arg)
 {
 	LR_DBG_ENTER(LR_C_CP, state->curr_pc, arg);
-	lightrec_dbg.n_c++;
+	if (psx_debug_trace) lightrec_dbg.n_c++;
 	lightrec_cp(state, (union code) arg);
 	LR_DBG_LEAVE();
 }

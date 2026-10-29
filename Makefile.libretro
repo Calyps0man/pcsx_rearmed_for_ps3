@@ -303,6 +303,8 @@ else ifeq ($(platform), arm64)
 # Lightweight PS3 Homebrew SDK
 else ifeq ($(platform), psl1ght)
 	TARGET := $(TARGET_NAME)_libretro_psl1ght.a
+	# schedule for the Cell PPU (in-order): plain ppc64 code stalls a lot more there
+	CFLAGS += -mcpu=cell
 	CFLAGS += -DBLARGG_BIG_ENDIAN=1 -D__ppc__
 	CFLAGS += -I$(PS3DEV)/ppu/include
 	CFLAGS += -DNO_DYLIB
