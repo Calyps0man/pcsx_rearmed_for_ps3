@@ -879,10 +879,12 @@ int SaveState(const char *file) {
 	psxRcntFreeze(f, 1);
 	STEP("save: mdec");
 	mdecFreeze(f, 1);
-	STEP("save: pad");
+	STEP("save: dynarec blocks");
 	ndrc_freeze(f, 1);
+	STEP("save: pad");
 	padFreeze(f, 1);
 
+	STEP("save: closing");
 	memset(misc, 0xff, sizeof(*misc));
 	SaveFuncs.close(f);
 	STEP(NULL);
