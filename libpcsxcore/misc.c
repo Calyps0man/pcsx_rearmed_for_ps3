@@ -141,7 +141,9 @@ void psx_debug_state(char *b, int n)
 	if (psxCpu != &psxInt && psx_debug_trace && k > 0 && k < n) {
 		u32 tpc, tcount;
 		lightrec_plugin_debug_trace(&tpc, &tcount);
-		snprintf(b + k, n - k, "; dynarec: last block %08x, %u block entries", tpc, tcount);
+		extern unsigned int lightrec_code_flushes;
+		snprintf(b + k, n - k, "; dynarec: last block %08x, %u block entries, code buffer full %u times",
+			 tpc, tcount, lightrec_code_flushes);
 	}
 #endif
 }

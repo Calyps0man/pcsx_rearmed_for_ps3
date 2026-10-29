@@ -863,6 +863,8 @@ static void lightrec_free_code(struct lightrec_state *state, void *ptr)
 
 static char lightning_code_data[0x80000];
 
+unsigned int lightrec_code_flushes;
+
 static void * lightrec_emit_code(struct lightrec_state *state,
 				 const struct block *block,
 				 jit_state_t *_jit, unsigned int *size)
@@ -904,6 +906,19 @@ static void * lightrec_emit_code(struct lightrec_state *state,
 			pr_debug("Re-try to alloc %zu bytes...\n", code_size);
 
 			code = lightrec_alloc_code(state, code_size);
+			if (!code) {
+				/* The code buffer is full of blocks that are
+				 * still valid (lightrec_block_is_old() rarely
+				 * matches, as the cycle counter is reset at
+				 * every exit). Free all the other blocks: no
+				 * block code is running while a block gets
+				 * compiled, they will be compiled again when
+				 * needed. Without this, the compiler failed
+				 * here for good and the emulation froze. */
+				lightrec_free_all_blocks_except(state->block_cache, block);
+				lightrec_code_flushes++;
+				code = lightrec_alloc_code(state, code_size);
+			}
 			if (!code) {
 				pr_err("Could not alloc even after removing old blocks!\n");
 				return NULL;
