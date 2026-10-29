@@ -21,6 +21,7 @@
 * Handles all CD-ROM registers and functions.
 */
 
+#include <stdio.h>
 #include <stdalign.h>
 #include <assert.h>
 #include "cdrom.h"
@@ -1737,6 +1738,14 @@ static void getCdInfo(void)
 	cdra_getTN(cdr.ResultTN);
 	cdra_getTD(0, cdr.SetSectorEnd);
 	cdra_getStatus(&cdr_stat);
+}
+
+/* one line for a front end's hang report (read from another thread: a snapshot) */
+int cdrDebugState(char *b, int n)
+{
+	return snprintf(b, n, "cdrom: stat %02x drive %d reading %u cmd %02x in progress %04x irq %02x/%02x pending %u setloc %u",
+		cdr.StatP, cdr.DriveState, (unsigned)cdr.Reading, cdr.Cmd, cdr.CmdInProgress,
+		cdr.IrqStat, cdr.IrqMask, cdr.Irq1Pending, cdr.SetlocPending);
 }
 
 void cdrReset() {

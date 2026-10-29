@@ -35,6 +35,7 @@ void mdecWrite1(u32 data);
 u32 mdecRead0();
 u32 mdecRead1();
 void psxDma0(u32 madr, u32 bcr, u32 chcr);
+extern unsigned int mdec_dma1_count;   /* MDEC output DMAs so far (FMV detection) */
 void psxDma1(u32 madr, u32 bcr, u32 chcr);
 void mdec0Interrupt();
 void mdec1Interrupt();

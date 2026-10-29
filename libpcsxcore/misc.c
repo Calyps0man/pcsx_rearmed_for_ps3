@@ -27,6 +27,7 @@
 #include <errno.h>
 #include <assert.h>
 #include "misc.h"
+#include "psxcounters.h"
 #include "cdrom.h"
 #include "cdrom-async.h"
 #include "mdec.h"
@@ -50,6 +51,28 @@ static u32 save_counter;
 /* step of SaveState/LoadState in progress, for front ends that report hangs */
 const char *volatile psx_state_step;
 #define STEP(x) (psx_state_step = (x))
+
+/* PS1 CPU, interrupt and CD-ROM state as text, for a front end's hang report.
+   Read from another thread while the emulator may be running: a snapshot. Two
+   calls a few seconds apart tell a stuck host-side wait (nothing moves) from a
+   game waiting in a loop (pc/cycle move, interrupts pending or masked). */
+int cdrDebugState(char *b, int n);
+void psx_debug_state(char *b, int n)
+{
+	u32 pc = psxRegs.pc, code[4] = { 0, }, i;
+	int k;
+	if ((pc & 0x1fffffff) < 0x800000 && !(pc & 3))
+		for (i = 0; i < 4; i++)
+			code[i] = psxMu32(pc + i * 4);
+	k = snprintf(b, n, "pc %08x [%08x %08x %08x %08x] ra %08x sp %08x cycle %u next event %u "
+		"sr %08x cause %08x istat %04x imask %04x events %08x frame %u hsync %u step %s; ",
+		pc, code[0], code[1], code[2], code[3], psxRegs.GPR.n.ra, psxRegs.GPR.n.sp,
+		psxRegs.cycle, psxRegs.next_interupt, psxRegs.CP0.n.SR, psxRegs.CP0.n.Cause,
+		psxHu32(0x1070), psxHu32(0x1074), psxRegs.interrupt, frame_counter, hSyncCount,
+		psx_state_step ? psx_state_step : "-");
+	if (k > 0 && k < n)
+		cdrDebugState(b + k, n - k);
+}
 static char *manuallyLoadedExePath;
 
 // PSX Executable types

@@ -235,11 +235,15 @@ void mdec0Interrupt()
 #define SIZE_OF_24B_BLOCK (16*16*3)
 #define SIZE_OF_16B_BLOCK (16*16*2)
 
+unsigned int mdec_dma1_count;
+
 void psxDma1(u32 adr, u32 bcr, u32 chcr) {
 	u32 words, words_max = 0;
 	int blk[DSIZE2 * 6];
 	u8 * image;
 	int size;
+
+	mdec_dma1_count++;   /* front ends: an FMV is playing */
 
 	if (chcr != 0x01000200) {
 		log_unhandled("mdec1: invalid dma %08x\n", chcr);
