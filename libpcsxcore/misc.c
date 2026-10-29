@@ -130,6 +130,14 @@ void psx_debug_state(char *b, int n)
 	if (k > 0 && k < n)
 		k += cdrDebugState(b + k, n - k);
 #ifdef LIGHTREC
+	if (psxCpu != &psxInt && k > 0 && k < n) {
+		/* the dynarec sends stores through bad pointers to the unused
+		   0x1f800400-0x1f8007ff (no memory map on this host): seen any? */
+		const u32 *junk = (const u32 *)(psxRegs.ptrs.psxH + 0x400);
+		int any = 0, j;
+		for (j = 0; j < 0x100; j++) any |= junk[j] != 0;
+		k += snprintf(b + k, n - k, "; bad-pointer stores %s", any ? "SEEN" : "none");
+	}
 	if (psxCpu != &psxInt && psx_debug_trace && k > 0 && k < n) {
 		u32 tpc, tcount;
 		lightrec_plugin_debug_trace(&tpc, &tcount);

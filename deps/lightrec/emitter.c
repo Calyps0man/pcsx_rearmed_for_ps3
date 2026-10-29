@@ -1455,6 +1455,23 @@ static void rec_store_io(struct lightrec_cstate *cstate,
 				rec_io_mask(cstate->state), false);
 }
 
+/* Without the memory map (no mmap, e.g. the PS3), the code below writes to host
+ * memory computed from the PS1 address: a store through a bad pointer (to an
+ * address the PS1 has no memory at, which the interpreter just ignores) wrote
+ * outside the emulated memory and corrupted the emulator (Terracon froze).
+ * Stores that are not to RAM must stay inside the 64 KiB around the scratchpad
+ * (scratchpad and I/O): others go to the unused 0x1f800400-0x1f8007ff. */
+static void clamp_scratch_store(jit_state_t *_jit, u8 addr, u8 tmp)
+{
+	jit_node_t *ok;
+
+	jit_rshi_u(tmp, addr, 16);
+	ok = jit_beqi(tmp, 0x1f80);
+	jit_andi(addr, addr, 0x3ff);
+	jit_ori(addr, addr, 0x1f800400);
+	jit_patch(ok);
+}
+
 static void rec_store_direct_no_invalidate(struct lightrec_cstate *cstate,
 					   const struct block *block,
 					   u16 offset, jit_code_t code,
@@ -1493,13 +1510,29 @@ static void rec_store_direct_no_invalidate(struct lightrec_cstate *cstate,
 
 		to_not_ram = jit_bmsi(tmp, BIT(28));
 
-		jit_movi(tmp2, state->offset_ram);
+		if (!state->mirrors_mapped) {
+			/* RAM: a bad pointer above 2 MiB goes to the junk area too */
+			jit_node_t *in_ram = jit_blti_u(tmp, RAM_SIZE);
+			jit_movi(tmp, 0x1f800400);
+			jit_movi(tmp2, state->offset_scratch);
+			to_end = jit_b();
+			jit_patch(in_ram);
+			jit_movi(tmp2, state->offset_ram);
+			jit_node_t *to_end_ram = jit_b();
+			jit_patch(to_not_ram);
+			clamp_scratch_store(_jit, tmp, tmp2);
+			jit_movi(tmp2, state->offset_scratch);
+			jit_patch(to_end);
+			jit_patch(to_end_ram);
+		} else {
+			jit_movi(tmp2, state->offset_ram);
 
-		to_end = jit_b();
-		jit_patch(to_not_ram);
+			to_end = jit_b();
+			jit_patch(to_not_ram);
 
-		jit_movi(tmp2, state->offset_scratch);
-		jit_patch(to_end);
+			jit_movi(tmp2, state->offset_scratch);
+			jit_patch(to_end);
+		}
 	} else if (state->offset_ram) {
 		tmp2 = lightrec_alloc_reg_temp_with_value(reg_cache, _jit,
 							  state->offset_ram);
@@ -1613,6 +1646,9 @@ static void rec_store_direct(struct lightrec_cstate *cstate, const struct block 
 
 		to_end = jit_b();
 		jit_patch(to_not_ram);
+
+		if (!state->mirrors_mapped)
+			clamp_scratch_store(_jit, tmp2, tmp);
 	}
 
 	if (state->offset_ram || state->offset_scratch)
