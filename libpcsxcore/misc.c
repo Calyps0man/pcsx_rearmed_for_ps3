@@ -141,9 +141,13 @@ void psx_debug_state(char *b, int n)
 	if (psxCpu != &psxInt && psx_debug_trace && k > 0 && k < n) {
 		u32 tpc, tcount;
 		lightrec_plugin_debug_trace(&tpc, &tcount);
-		extern unsigned int lightrec_code_flushes;
-		snprintf(b + k, n - k, "; dynarec: last block %08x, %u block entries, code buffer full %u times",
-			 tpc, tcount, lightrec_code_flushes);
+		extern unsigned int lightrec_code_flushes, lightrec_bad_accesses;
+		extern u32 lightrec_bad_access_addr, lightrec_bad_access_pc;
+		k += snprintf(b + k, n - k, "; dynarec: last block %08x, %u block entries, code buffer full %u times",
+			      tpc, tcount, lightrec_code_flushes);
+		if (k > 0 && k < n)
+			snprintf(b + k, n - k, ", accesses to unmapped memory %u (last %08x in block %08x)",
+				 lightrec_bad_accesses, lightrec_bad_access_addr, lightrec_bad_access_pc);
 	}
 #endif
 }

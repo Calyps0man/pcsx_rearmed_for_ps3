@@ -597,6 +597,9 @@ static void lightrec_plugin_execute_internal(bool block_only)
 		if (flags & LIGHTREC_EXIT_SEGFAULT) {
 			fprintf(stderr, "Exiting at cycle 0x%08x\n",
 				psxRegs.cycle);
+			/* stderr goes nowhere on some hosts (PS3): say it in the log too */
+			SysPrintf("lightrec: cannot go on at pc %08x (cycle %08x), exiting\n",
+				  psxRegs.pc, psxRegs.cycle);
 			if (lightrec_debug)
 				print_for_big_ass_debugger();
 			exit(1);

@@ -117,15 +117,8 @@ static const struct lightrec_mem_map_ops lightrec_default_ops = {
 	.swu = lightrec_default_swu,
 };
 
-static void __segfault_cb(struct lightrec_state *state, u32 addr,
-			  const struct block *block)
-{
-	lightrec_set_exit_flags(state, LIGHTREC_EXIT_SEGFAULT);
-	pr_err("Segmentation fault in recompiled code: invalid "
-	       "load/store at address "PC_FMT"\n", addr);
-	if (block)
-		pr_err("Was executing block "PC_FMT"\n", block->pc);
-}
+unsigned int lightrec_bad_accesses;
+u32 lightrec_bad_access_addr, lightrec_bad_access_pc;
 
 static void lightrec_swl(struct lightrec_state *state,
 			 const struct lightrec_mem_map_ops *ops,
@@ -280,8 +273,37 @@ u32 lightrec_rw(struct lightrec_state *state, union code op, u32 base,
 
 	map = lightrec_get_map(state, &host, addr);
 	if (!map) {
-		__segfault_cb(state, addr, block);
-		return 0;
+		/* Nothing is mapped there. Do what the interpreter does (the
+		 * PS1 itself would raise a bus error that games never expect):
+		 * loads read all ones, stores are dropped, and the emulation
+		 * goes on. Stopping here (LIGHTREC_EXIT_SEGFAULT) made the
+		 * front end exit(), which froze the PS3 (Terracon reads
+		 * through a stale pointer after loading a level). */
+		lightrec_bad_accesses++;
+		lightrec_bad_access_addr = addr;
+		lightrec_bad_access_pc = block ? block->pc : state->curr_pc;
+		if (flags && !LIGHTREC_FLAGS_GET_IO_MODE(*flags))
+			*flags |= LIGHTREC_IO_MODE(LIGHTREC_IO_HW);
+
+		switch (op.i.op) {
+		case OP_LB:
+		case OP_LH:
+		case OP_LW:
+		case OP_META_LWU:
+			return 0xffffffff;
+		case OP_LBU:
+			return 0xff;
+		case OP_LHU:
+			return 0xffff;
+		case OP_LWL:
+		case OP_LWR:
+			return 0xffffffff;
+		case OP_LWC2:
+			lightrec_mtc2(state, op.i.rt, 0xffffffff);
+			return 0;
+		default:
+			return 0;
+		}
 	}
 
 	if (flags)
