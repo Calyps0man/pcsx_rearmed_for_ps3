@@ -2176,3 +2176,20 @@ void lightrec_set_cycles_per_opcode(struct lightrec_state *state, u32 cycles)
 	if (ENABLE_THREADED_COMPILER)
 		lightrec_recompiler_unpause(state->rec);
 }
+
+int lightrec_debug_code(struct lightrec_state *state, u32 pc, int which,
+			const void **code, unsigned int *size,
+			unsigned int *nb_ops, unsigned int *flags)
+{
+	struct block *block = which ? state->dispatcher
+				    : lightrec_find_block(state->block_cache, pc);
+
+	if (!block || !block->function)
+		return 0;
+
+	*code = (const void *)block->function;
+	*size = block->code_size;
+	*nb_ops = block->nb_ops;
+	*flags = block->flags;
+	return 1;
+}

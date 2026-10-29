@@ -763,3 +763,12 @@ R3000Acpu psxRec =
 	lightrec_plugin_apply_config,
 	lightrec_plugin_shutdown,
 };
+
+/* front-end hang reports: native code of the block at pc / the dispatcher */
+int lightrec_plugin_debug_code(u32 pc, int which, const void **code, unsigned int *size,
+			       unsigned int *nb_ops, unsigned int *flags)
+{
+	if (!lightrec_state)
+		return 0;
+	return lightrec_debug_code(lightrec_state, pc, which, code, size, nb_ops, flags);
+}

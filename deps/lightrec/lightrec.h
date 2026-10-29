@@ -155,6 +155,11 @@ __api __cnst struct lightrec_registers *
 lightrec_get_registers(struct lightrec_state *state);
 
 __api u32 lightrec_current_cycle_count(const struct lightrec_state *state);
+/* debugging: native code of the block at pc (which = 0) or of the dispatcher
+   (which = 1); returns 0 if there is none */
+__api int lightrec_debug_code(struct lightrec_state *state, u32 pc, int which,
+			      const void **code, unsigned int *size,
+			      unsigned int *nb_ops, unsigned int *flags);
 __api void lightrec_reset_cycle_count(struct lightrec_state *state, u32 cycles);
 __api void lightrec_set_target_cycle_count(struct lightrec_state *state,
 					   u32 cycles);

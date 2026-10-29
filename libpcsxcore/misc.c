@@ -57,6 +57,50 @@ const char *volatile psx_state_step;
    calls a few seconds apart tell a stuck host-side wait (nothing moves) from a
    game waiting in a loop (pc/cycle move, interrupts pending or masked). */
 int cdrDebugState(char *b, int n);
+#ifdef LIGHTREC
+int lightrec_plugin_debug_code(u32 pc, int which, const void **code, unsigned int *size,
+			       unsigned int *nb_ops, unsigned int *flags);
+#endif
+
+/* Hang dump for a front end: "HANG", version 1, pc, then for the block at pc and
+   the dispatcher (Lightrec): host address (64-bit), code size, MIPS opcode count,
+   flags, native code; then the 34 GPR/LO/HI registers, CP0 SR/Cause/EPC, 2 MiB
+   RAM, 1 KiB scratchpad. All little-endian. Returns 0 if the file failed. */
+static void hd_w32(FILE *f, u32 v)
+{
+	unsigned char b[4] = { (unsigned char)v, (unsigned char)(v >> 8), (unsigned char)(v >> 16), (unsigned char)(v >> 24) };
+	fwrite(b, 1, 4, f);
+}
+int psx_debug_dump(const char *path)
+{
+	FILE *f = fopen(path, "wb");
+	u32 pc = psxRegs.pc, i;
+	int which;
+	if (!f)
+		return 0;
+	fwrite("HANG", 1, 4, f);
+	hd_w32(f, 1); hd_w32(f, pc);
+	for (which = 0; which < 2; which++) {
+		const void *code = NULL;
+		unsigned int size = 0, nb = 0, fl = 0;
+#ifdef LIGHTREC
+		if (psxCpu != &psxInt && !lightrec_plugin_debug_code(pc, which, &code, &size, &nb, &fl))
+			code = NULL, size = 0;
+#endif
+		if (!code) size = 0;
+		hd_w32(f, (u32)(uintptr_t)code); hd_w32(f, (u32)((u64)(uintptr_t)code >> 32));
+		hd_w32(f, size); hd_w32(f, nb); hd_w32(f, fl);
+		if (size)
+			fwrite(code, 1, size, f);
+	}
+	for (i = 0; i < 34; i++)
+		hd_w32(f, psxRegs.GPR.r[i]);
+	hd_w32(f, psxRegs.CP0.n.SR); hd_w32(f, psxRegs.CP0.n.Cause); hd_w32(f, psxRegs.CP0.n.EPC);
+	fwrite(psxRegs.ptrs.psxM, 1, 0x200000, f);   /* PS1 memory bytes as they are (little-endian) */
+	fwrite(psxRegs.ptrs.psxH, 1, 0x400, f);
+	return fclose(f) == 0;
+}
+
 void psx_debug_state(char *b, int n)
 {
 	u32 pc = psxRegs.pc, code[4] = { 0, }, i;
