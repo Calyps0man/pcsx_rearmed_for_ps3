@@ -64,6 +64,8 @@ int psx_debug_trace;
 int lightrec_plugin_debug_code(u32 pc, int which, const void **code, unsigned int *size,
 			       unsigned int *nb_ops, unsigned int *flags);
 void lightrec_plugin_debug_trace(u32 *pc, u32 *count);
+int lightrec_plugin_debug_info(char *b, int n);
+void lightrec_plugin_debug_regs(u32 *gpr34, u32 *cp0_3);
 #endif
 
 /* Hang dump for a front end: "HANG", version 2, pc, last block entered and the
@@ -106,9 +108,19 @@ int psx_debug_dump(void *fp)
 		if (size)
 			fwrite(code, 1, size, f);
 	}
-	for (i = 0; i < 34; i++)
-		hd_w32(f, psxRegs.GPR.r[i]);
-	hd_w32(f, psxRegs.CP0.n.SR); hd_w32(f, psxRegs.CP0.n.Cause); hd_w32(f, psxRegs.CP0.n.EPC);
+	{	/* the dynarec keeps the live registers itself (psxRegs gets them
+		   only now and then) */
+		u32 gpr[34], cp0[3];
+		memcpy(gpr, psxRegs.GPR.r, sizeof(gpr));
+		cp0[0] = psxRegs.CP0.n.SR; cp0[1] = psxRegs.CP0.n.Cause; cp0[2] = psxRegs.CP0.n.EPC;
+#ifdef LIGHTREC
+		if (psxCpu != &psxInt)
+			lightrec_plugin_debug_regs(gpr, cp0);
+#endif
+		for (i = 0; i < 34; i++)
+			hd_w32(f, gpr[i]);
+		hd_w32(f, cp0[0]); hd_w32(f, cp0[1]); hd_w32(f, cp0[2]);
+	}
 	fwrite(psxRegs.ptrs.psxM, 1, 0x200000, f);   /* PS1 memory bytes as they are (little-endian) */
 	fwrite(psxRegs.ptrs.psxH, 1, 0x400, f);
 	return !ferror(f);
@@ -146,8 +158,10 @@ void psx_debug_state(char *b, int n)
 		k += snprintf(b + k, n - k, "; dynarec: last block %08x, %u block entries, code buffer full %u times",
 			      tpc, tcount, lightrec_code_flushes);
 		if (k > 0 && k < n)
-			snprintf(b + k, n - k, ", accesses to unmapped memory %u (last %08x in block %08x)",
-				 lightrec_bad_accesses, lightrec_bad_access_addr, lightrec_bad_access_pc);
+			k += snprintf(b + k, n - k, ", accesses to unmapped memory %u (last %08x in block %08x)",
+				      lightrec_bad_accesses, lightrec_bad_access_addr, lightrec_bad_access_pc);
+		if (k > 0 && k < n)
+			k += lightrec_plugin_debug_info(b + k, n - k);
 	}
 #endif
 }

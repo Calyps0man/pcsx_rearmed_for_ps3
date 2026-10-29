@@ -117,6 +117,8 @@ static const struct lightrec_mem_map_ops lightrec_default_ops = {
 	.swu = lightrec_default_swu,
 };
 
+struct lightrec_dbg lightrec_dbg;
+
 unsigned int lightrec_bad_accesses;
 u32 lightrec_bad_access_addr, lightrec_bad_access_pc;
 
@@ -425,10 +427,23 @@ static void lightrec_rw_helper(struct lightrec_state *state,
 
 static void lightrec_rw_cb(struct lightrec_state *state, u32 arg)
 {
+	LR_DBG_ENTER(LR_C_RW, state->curr_pc, arg);
+	lightrec_dbg.n_c++;
 	lightrec_rw_helper(state, (union code) arg, NULL, NULL, 0);
+	LR_DBG_LEAVE();
 }
 
+static void lightrec_rw_generic_cb_(struct lightrec_state *state, u32 arg);
+
 static void lightrec_rw_generic_cb(struct lightrec_state *state, u32 arg)
+{
+	LR_DBG_ENTER(LR_C_RW_GENERIC, state->curr_pc, arg);
+	lightrec_dbg.n_c++;
+	lightrec_rw_generic_cb_(state, arg);
+	LR_DBG_LEAVE();
+}
+
+static void lightrec_rw_generic_cb_(struct lightrec_state *state, u32 arg)
 {
 	struct block *block;
 	struct opcode *op;
@@ -541,12 +556,15 @@ u32 lightrec_mfc(struct lightrec_state *state, union code op)
 
 static void lightrec_mfc_cb(struct lightrec_state *state, union code op)
 {
+	LR_DBG_ENTER(LR_C_MFC, state->curr_pc, op.opcode);
+	lightrec_dbg.n_c++;
 	u32 rt = lightrec_mfc(state, op);
 
 	if (op.i.op == OP_SWC2)
 		state->temp_reg = rt;
 	else if (op.r.rt)
 		state->regs.gpr[op.r.rt] = rt;
+	LR_DBG_LEAVE();
 }
 
 static void lightrec_mtc0(struct lightrec_state *state, u8 reg, u32 data)
@@ -671,6 +689,8 @@ void lightrec_mtc(struct lightrec_state *state, union code op, u8 reg, u32 data)
 
 static void lightrec_mtc_cb(struct lightrec_state *state, u32 arg)
 {
+	LR_DBG_ENTER(LR_C_MTC, state->curr_pc, arg);
+	lightrec_dbg.n_c++;
 	union code op = (union code) arg;
 	u32 data;
 	u8 reg;
@@ -684,6 +704,7 @@ static void lightrec_mtc_cb(struct lightrec_state *state, u32 arg)
 	}
 
 	lightrec_mtc(state, op, reg, data);
+	LR_DBG_LEAVE();
 }
 
 void lightrec_rfe(struct lightrec_state *state)
@@ -712,7 +733,10 @@ void lightrec_cp(struct lightrec_state *state, union code op)
 
 static void lightrec_cp_cb(struct lightrec_state *state, u32 arg)
 {
+	LR_DBG_ENTER(LR_C_CP, state->curr_pc, arg);
+	lightrec_dbg.n_c++;
 	lightrec_cp(state, (union code) arg);
+	LR_DBG_LEAVE();
 }
 
 static struct block * lightrec_get_block(struct lightrec_state *state, u32 pc)
@@ -745,7 +769,12 @@ static struct block * lightrec_get_block(struct lightrec_state *state, u32 pc)
 	}
 
 	if (!block) {
-		block = lightrec_precompile_block(state, pc);
+		{
+			LR_DBG_ENTER(LR_PRECOMPILE, pc, 0);
+			lightrec_dbg.n_precomp++;
+			block = lightrec_precompile_block(state, pc);
+			LR_DBG_LEAVE();
+		}
 		if (!block) {
 			pr_err("Unable to recompile block at "PC_FMT"\n", pc);
 			lightrec_set_exit_flags(state, LIGHTREC_EXIT_SEGFAULT);
@@ -758,7 +787,7 @@ static struct block * lightrec_get_block(struct lightrec_state *state, u32 pc)
 	return block;
 }
 
-static void * get_next_block_func(struct lightrec_state *state, u32 pc)
+static void * get_next_block_func_(struct lightrec_state *state, u32 pc)
 {
 	struct block *block;
 	bool should_recompile;
@@ -766,6 +795,8 @@ static void * get_next_block_func(struct lightrec_state *state, u32 pc)
 	int err;
 
 	do {
+		lightrec_dbg.n_loop++;
+		lightrec_dbg.pc = pc;
 		func = lut_read(state, lut_offset(pc));
 		if (func && func != state->get_next_block)
 			break;
@@ -839,6 +870,17 @@ static void * get_next_block_func(struct lightrec_state *state, u32 pc)
 		 && state->current_cycle < state->target_cycle);
 
 	state->curr_pc = pc;
+	return func;
+}
+
+static void * get_next_block_func(struct lightrec_state *state, u32 pc)
+{
+	void *func;
+	LR_DBG_ENTER(LR_NEXT_BLOCK, pc, 0);
+
+	lightrec_dbg.n_next++;
+	func = get_next_block_func_(state, pc);
+	LR_DBG_LEAVE();
 	return func;
 }
 
@@ -1061,7 +1103,19 @@ err_no_mem:
 	return NULL;
 }
 
+static u32 lightrec_memset_(struct lightrec_state *state);
+
 static u32 lightrec_memset(struct lightrec_state *state)
+{
+	u32 ret;
+	LR_DBG_ENTER(LR_C_MEMSET, state->curr_pc, 0);
+
+	ret = lightrec_memset_(state);
+	LR_DBG_LEAVE();
+	return ret;
+}
+
+static u32 lightrec_memset_(struct lightrec_state *state)
 {
 	u32 kunseg_pc = kunseg(state->regs.gpr[4]);
 	void *host;
@@ -1085,7 +1139,19 @@ static u32 lightrec_memset(struct lightrec_state *state)
 	return 8 + 5 * (length  + 3 / 4);
 }
 
+static u32 lightrec_check_load_delay_(struct lightrec_state *state, u32 pc, u8 reg);
+
 static u32 lightrec_check_load_delay(struct lightrec_state *state, u32 pc, u8 reg)
+{
+	u32 ret;
+	LR_DBG_ENTER(LR_C_LOAD_DELAY, pc, reg);
+
+	ret = lightrec_check_load_delay_(state, pc, reg);
+	LR_DBG_LEAVE();
+	return ret;
+}
+
+static u32 lightrec_check_load_delay_(struct lightrec_state *state, u32 pc, u8 reg)
 {
 	struct block *block;
 	union code first_op;
@@ -1587,8 +1653,23 @@ static void lightrec_reap_opcode_list(struct lightrec_state *state, void *data)
 	lightrec_free_opcode_list(state, data);
 }
 
+static int lightrec_compile_block_(struct lightrec_cstate *cstate,
+				   struct block *block);
+
 int lightrec_compile_block(struct lightrec_cstate *cstate,
 			   struct block *block)
+{
+	int ret;
+	LR_DBG_ENTER(LR_COMPILE, block->pc, 0);
+
+	lightrec_dbg.n_comp++;
+	ret = lightrec_compile_block_(cstate, block);
+	LR_DBG_LEAVE();
+	return ret;
+}
+
+static int lightrec_compile_block_(struct lightrec_cstate *cstate,
+				   struct block *block)
 {
 	struct block *dead_blocks[ARRAY_SIZE(cstate->targets)];
 	u32 was_dead[ARRAY_SIZE(cstate->targets) / 8];
@@ -1863,6 +1944,9 @@ u32 lightrec_execute(struct lightrec_state *state, u32 pc, u32 target_cycle)
 	void *block_trace;
 	s32 cycles_delta;
 
+	lightrec_dbg.n_exec++;
+	lightrec_dbg.where = LR_EXECUTE;
+	lightrec_dbg.pc = pc;
 	state->exit_flags = LIGHTREC_EXIT_NORMAL;
 
 	/* Handle the cycle counter overflowing */
@@ -1876,8 +1960,10 @@ u32 lightrec_execute(struct lightrec_state *state, u32 pc, u32 target_cycle)
 	if (block_trace) {
 		cycles_delta = state->target_cycle - state->current_cycle;
 
+		lightrec_dbg.where = LR_NATIVE;
 		cycles_delta = (*func)(state, state->curr_pc,
 				       block_trace, cycles_delta);
+		lightrec_dbg.where = LR_EXECUTE;
 
 		state->current_cycle = state->target_cycle - cycles_delta;
 	}
@@ -1888,6 +1974,7 @@ u32 lightrec_execute(struct lightrec_state *state, u32 pc, u32 target_cycle)
 	if (LOG_LEVEL >= INFO_L)
 		lightrec_print_info(state);
 
+	lightrec_dbg.where = LR_OUTSIDE;
 	return state->curr_pc;
 }
 
@@ -2227,6 +2314,36 @@ void lightrec_set_cycles_per_opcode(struct lightrec_state *state, u32 cycles)
 
 	if (ENABLE_THREADED_COMPILER)
 		lightrec_recompiler_unpause(state->rec);
+}
+
+int lightrec_debug_info(struct lightrec_state *state, char *b, int n)
+{
+	static const char *const names[] = {
+		"outside", "lightrec_execute", "recompiled code", "get_next_block_func",
+		"interpreter", "compiler", "precompiler", "C memory access",
+		"C memory access (generic)", "C mfc", "C mtc", "C cop op",
+		"C memset", "C load delay check",
+	};
+	struct lightrec_dbg d = lightrec_dbg;
+	u32 ra = state->regs.gpr[31];
+	const char *w = d.where < sizeof(names) / sizeof(names[0]) ? names[d.where] : "?";
+
+	return snprintf(b, n, "; lightrec in %s pc %08x arg %08x; runs %u, next-block %u (loops %u), "
+			"C calls %u, interpreter %u, compiles %u, precompiles %u; curr_pc %08x cycles %u/%u "
+			"exit %x; live ra %08x sp %08x a0 %08x a1 %08x s0 %08x; lut[ra] %p lut[curr] %p",
+			w, d.pc, d.arg, d.n_exec, d.n_next, d.n_loop, d.n_c, d.n_interp, d.n_comp,
+			d.n_precomp, state->curr_pc, state->current_cycle, state->target_cycle,
+			state->exit_flags, ra, state->regs.gpr[29], state->regs.gpr[4],
+			state->regs.gpr[5], state->regs.gpr[16],
+			lut_read(state, lut_offset(ra)), lut_read(state, lut_offset(state->curr_pc)));
+}
+
+void lightrec_debug_regs(struct lightrec_state *state, u32 *gpr34, u32 *cp0_3)
+{
+	memcpy(gpr34, state->regs.gpr, 34 * sizeof(u32));
+	cp0_3[0] = state->regs.cp0[12];
+	cp0_3[1] = state->regs.cp0[13];
+	cp0_3[2] = state->regs.cp0[14];
 }
 
 void lightrec_debug_trace(struct lightrec_state *state, u32 *pc, u32 *count)

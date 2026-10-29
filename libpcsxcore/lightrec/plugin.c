@@ -81,6 +81,9 @@ static unsigned char ps3_code_buffer[CODE_BUFFER_SIZE]
 
 static struct lightrec_state *lightrec_state;
 
+/* where lightrec_plugin_execute_internal() is (for hang reports) */
+static volatile int plugin_where;
+
 static bool use_lightrec_interpreter;
 static bool block_stepping;
 //static bool use_pcsx_interpreter;
@@ -564,7 +567,9 @@ static void lightrec_plugin_execute_internal(bool block_only)
 	u32 old_pc = psxRegs.pc;
 
 	regs = lightrec_get_registers(lightrec_state);
+	plugin_where = 1;
 	gen_interupt((psxCP0Regs *)regs->cp0);
+	plugin_where = 0;
 	if (!block_only && psxRegs.stop)
 		return;
 
@@ -586,8 +591,10 @@ static void lightrec_plugin_execute_internal(bool block_only)
 							      psxRegs.pc,
 							      cycles_lightrec);
 		} else {
+			plugin_where = 2;
 			psxRegs.pc = lightrec_execute(lightrec_state,
 						      psxRegs.pc, cycles_lightrec);
+			plugin_where = 3;
 		}
 
 		lightrec_transition_to_pcsx(lightrec_state);
@@ -638,6 +645,7 @@ static void lightrec_plugin_execute_internal(bool block_only)
 		regs->cp0[13] &= ~0x7c;
 		psxException(regs->cp0[13], 0, (psxCP0Regs *)regs->cp0);
 	}
+	plugin_where = 0;
 }
 
 static void lightrec_plugin_execute(psxRegisters *regs)
@@ -774,6 +782,21 @@ int lightrec_plugin_debug_code(u32 pc, int which, const void **code, unsigned in
 	if (!lightrec_state)
 		return 0;
 	return lightrec_debug_code(lightrec_state, pc, which, code, size, nb_ops, flags);
+}
+
+int lightrec_plugin_debug_info(char *b, int n)
+{
+	static const char *const names[] = { "idle", "events", "dynarec", "after the dynarec" };
+	int k = snprintf(b, n, "; plugin at %s", names[plugin_where & 3]);
+	if (lightrec_state && k > 0 && k < n)
+		k += lightrec_debug_info(lightrec_state, b + k, n - k);
+	return k;
+}
+
+void lightrec_plugin_debug_regs(u32 *gpr34, u32 *cp0_3)
+{
+	if (lightrec_state)
+		lightrec_debug_regs(lightrec_state, gpr34, cp0_3);
 }
 
 void lightrec_plugin_debug_trace(u32 *pc, u32 *count)

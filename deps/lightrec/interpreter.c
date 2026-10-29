@@ -1225,8 +1225,15 @@ u32 lightrec_emulate_block(struct lightrec_state *state, struct block *block, u3
 {
 	u32 offset = (kunseg(pc) - kunseg(block->pc)) >> 2;
 
-	if (offset < block->nb_ops)
-		return lightrec_emulate_block_list(state, block, offset);
+	if (offset < block->nb_ops) {
+		u32 ret;
+		LR_DBG_ENTER(LR_INTERP, pc, block->pc);
+
+		lightrec_dbg.n_interp++;
+		ret = lightrec_emulate_block_list(state, block, offset);
+		LR_DBG_LEAVE();
+		return ret;
+	}
 
 	pr_err(PC_FMT" is outside block at "PC_FMT"\n", pc, block->pc);
 

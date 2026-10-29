@@ -213,6 +213,24 @@ void lightrec_free_block(struct lightrec_state *state, struct block *block);
 
 void remove_from_code_lut(struct blockcache *cache, struct block *block);
 
+/* debugging (front end's hang reports): where the dynarec is and what it has
+   been doing, readable from another thread */
+struct lightrec_dbg {
+	volatile u32 where, pc, arg;
+	volatile u32 n_exec, n_next, n_loop, n_c, n_interp, n_comp, n_precomp;
+};
+extern struct lightrec_dbg lightrec_dbg;
+enum {
+	LR_OUTSIDE, LR_EXECUTE, LR_NATIVE, LR_NEXT_BLOCK, LR_INTERP, LR_COMPILE,
+	LR_PRECOMPILE, LR_C_RW, LR_C_RW_GENERIC, LR_C_MFC, LR_C_MTC, LR_C_CP,
+	LR_C_MEMSET, LR_C_LOAD_DELAY,
+};
+#define LR_DBG_ENTER(w, p, a) \
+	u32 lr_dbg_w = lightrec_dbg.where, lr_dbg_p = lightrec_dbg.pc, lr_dbg_a = lightrec_dbg.arg; \
+	lightrec_dbg.where = (w); lightrec_dbg.pc = (p); lightrec_dbg.arg = (a)
+#define LR_DBG_LEAVE() \
+	(lightrec_dbg.where = lr_dbg_w, lightrec_dbg.pc = lr_dbg_p, lightrec_dbg.arg = lr_dbg_a)
+
 const struct lightrec_mem_map *
 lightrec_get_map(struct lightrec_state *state, void **host, u32 kaddr);
 

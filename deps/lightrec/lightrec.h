@@ -158,6 +158,8 @@ __api u32 lightrec_current_cycle_count(const struct lightrec_state *state);
 /* debugging: last block entered and the number of block entries, when blocks
    are compiled with psx_debug_trace set */
 __api void lightrec_debug_trace(struct lightrec_state *state, u32 *pc, u32 *count);
+__api int lightrec_debug_info(struct lightrec_state *state, char *b, int n);
+__api void lightrec_debug_regs(struct lightrec_state *state, u32 *gpr34, u32 *cp0_3);
 /* debugging: native code of the block at pc (which = 0) or of the dispatcher
    (which = 1); returns 0 if there is none */
 __api int lightrec_debug_code(struct lightrec_state *state, u32 pc, int which,
