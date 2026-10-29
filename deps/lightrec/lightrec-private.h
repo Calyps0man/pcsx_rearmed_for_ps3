@@ -199,6 +199,7 @@ struct lightrec_state {
 	u32 opt_flags;
 	_Bool with_32bit_lut;
 	_Bool mirrors_mapped;
+	u32 trace_pc, trace_count;	/* debugging: last block entered, entries */
 	void *code_lut[];
 };
 

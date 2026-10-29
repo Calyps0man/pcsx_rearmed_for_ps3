@@ -57,14 +57,19 @@ const char *volatile psx_state_step;
    calls a few seconds apart tell a stuck host-side wait (nothing moves) from a
    game waiting in a loop (pc/cycle move, interrupts pending or masked). */
 int cdrDebugState(char *b, int n);
+/* front end's debug log: Lightrec blocks record their PC and entries (set
+   before the game starts; blocks compiled with it set do it) */
+int psx_debug_trace;
 #ifdef LIGHTREC
 int lightrec_plugin_debug_code(u32 pc, int which, const void **code, unsigned int *size,
 			       unsigned int *nb_ops, unsigned int *flags);
+void lightrec_plugin_debug_trace(u32 *pc, u32 *count);
 #endif
 
-/* Hang dump for a front end: "HANG", version 1, pc, then for the block at pc and
-   the dispatcher (Lightrec): host address (64-bit), code size, MIPS opcode count,
-   flags, native code; then the 34 GPR/LO/HI registers, CP0 SR/Cause/EPC, 2 MiB
+/* Hang dump for a front end: "HANG", version 2, pc, last block entered and the
+   block entry count (Lightrec with psx_debug_trace), then for the block at pc,
+   the dispatcher and the last block entered: host address (64-bit), code size,
+   MIPS opcode count, flags, native code; then the 34 GPR/LO/HI registers, CP0 SR/Cause/EPC, 2 MiB
    RAM, 1 KiB scratchpad. All little-endian. Writes to the front end's open FILE
    (it flushes it to disk: the console usually gets switched off after a hang).
    Returns 0 on a write error. */
@@ -80,13 +85,19 @@ int psx_debug_dump(void *fp)
 	int which;
 	if (!f)
 		return 0;
+	u32 tpc = 0, tcount = 0;
+#ifdef LIGHTREC
+	if (psxCpu != &psxInt)
+		lightrec_plugin_debug_trace(&tpc, &tcount);
+#endif
 	fwrite("HANG", 1, 4, f);
-	hd_w32(f, 1); hd_w32(f, pc);
-	for (which = 0; which < 2; which++) {
+	hd_w32(f, 2); hd_w32(f, pc); hd_w32(f, tpc); hd_w32(f, tcount);
+	/* version 2: blocks at pc, the dispatcher, the last block entered */
+	for (which = 0; which < 3; which++) {
 		const void *code = NULL;
 		unsigned int size = 0, nb = 0, fl = 0;
 #ifdef LIGHTREC
-		if (psxCpu != &psxInt && !lightrec_plugin_debug_code(pc, which, &code, &size, &nb, &fl))
+		if (psxCpu != &psxInt && !lightrec_plugin_debug_code(which == 2 ? tpc : pc, which == 1, &code, &size, &nb, &fl))
 			code = NULL, size = 0;
 #endif
 		if (!code) size = 0;
@@ -117,7 +128,14 @@ void psx_debug_state(char *b, int n)
 		psxHu32(0x1070), psxHu32(0x1074), psxRegs.interrupt, frame_counter, hSyncCount,
 		psx_state_step ? psx_state_step : "-");
 	if (k > 0 && k < n)
-		cdrDebugState(b + k, n - k);
+		k += cdrDebugState(b + k, n - k);
+#ifdef LIGHTREC
+	if (psxCpu != &psxInt && psx_debug_trace && k > 0 && k < n) {
+		u32 tpc, tcount;
+		lightrec_plugin_debug_trace(&tpc, &tcount);
+		snprintf(b + k, n - k, "; dynarec: last block %08x, %u block entries", tpc, tcount);
+	}
+#endif
 }
 static char *manuallyLoadedExePath;
 

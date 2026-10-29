@@ -772,3 +772,10 @@ int lightrec_plugin_debug_code(u32 pc, int which, const void **code, unsigned in
 		return 0;
 	return lightrec_debug_code(lightrec_state, pc, which, code, size, nb_ops, flags);
 }
+
+void lightrec_plugin_debug_trace(u32 *pc, u32 *count)
+{
+	*pc = *count = 0;
+	if (lightrec_state)
+		lightrec_debug_trace(lightrec_state, pc, count);
+}

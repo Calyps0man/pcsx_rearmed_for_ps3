@@ -29,6 +29,8 @@
 #include <stddef.h>
 #include <string.h>
 
+extern int psx_debug_trace;	/* libpcsxcore/misc.c: front end debug log */
+
 static struct block * lightrec_precompile_block(struct lightrec_state *state,
 						u32 pc);
 static bool lightrec_block_is_fully_tagged(const struct block *block);
@@ -1601,6 +1603,19 @@ int lightrec_compile_block(struct lightrec_cstate *cstate,
 
 	start_of_block = jit_label();
 
+	/* debugging (front end's debug log): each block records its PC and counts
+	   its entries, so a hang report can tell which code runs */
+	if (psx_debug_trace) {
+		u8 tmp = lightrec_alloc_reg_temp(cstate->reg_cache, _jit);
+
+		jit_movi(tmp, block->pc);
+		jit_stxi_i(lightrec_offset(trace_pc), LIGHTREC_REG_STATE, tmp);
+		jit_ldxi_i(tmp, LIGHTREC_REG_STATE, lightrec_offset(trace_count));
+		jit_addi(tmp, tmp, 1);
+		jit_stxi_i(lightrec_offset(trace_count), LIGHTREC_REG_STATE, tmp);
+		lightrec_free_reg(cstate->reg_cache, tmp);
+	}
+
 	for (i = 0; i < block->nb_ops; i++) {
 		elm = &block->opcode_list[i];
 
@@ -2175,6 +2190,12 @@ void lightrec_set_cycles_per_opcode(struct lightrec_state *state, u32 cycles)
 
 	if (ENABLE_THREADED_COMPILER)
 		lightrec_recompiler_unpause(state->rec);
+}
+
+void lightrec_debug_trace(struct lightrec_state *state, u32 *pc, u32 *count)
+{
+	*pc = state->trace_pc;
+	*count = state->trace_count;
 }
 
 int lightrec_debug_code(struct lightrec_state *state, u32 pc, int which,
