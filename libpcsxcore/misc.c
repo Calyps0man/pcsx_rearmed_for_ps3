@@ -65,15 +65,17 @@ int lightrec_plugin_debug_code(u32 pc, int which, const void **code, unsigned in
 /* Hang dump for a front end: "HANG", version 1, pc, then for the block at pc and
    the dispatcher (Lightrec): host address (64-bit), code size, MIPS opcode count,
    flags, native code; then the 34 GPR/LO/HI registers, CP0 SR/Cause/EPC, 2 MiB
-   RAM, 1 KiB scratchpad. All little-endian. Returns 0 if the file failed. */
+   RAM, 1 KiB scratchpad. All little-endian. Writes to the front end's open FILE
+   (it flushes it to disk: the console usually gets switched off after a hang).
+   Returns 0 on a write error. */
 static void hd_w32(FILE *f, u32 v)
 {
 	unsigned char b[4] = { (unsigned char)v, (unsigned char)(v >> 8), (unsigned char)(v >> 16), (unsigned char)(v >> 24) };
 	fwrite(b, 1, 4, f);
 }
-int psx_debug_dump(const char *path)
+int psx_debug_dump(void *fp)
 {
-	FILE *f = fopen(path, "wb");
+	FILE *f = fp;
 	u32 pc = psxRegs.pc, i;
 	int which;
 	if (!f)
@@ -98,7 +100,7 @@ int psx_debug_dump(const char *path)
 	hd_w32(f, psxRegs.CP0.n.SR); hd_w32(f, psxRegs.CP0.n.Cause); hd_w32(f, psxRegs.CP0.n.EPC);
 	fwrite(psxRegs.ptrs.psxM, 1, 0x200000, f);   /* PS1 memory bytes as they are (little-endian) */
 	fwrite(psxRegs.ptrs.psxH, 1, 0x400, f);
-	return fclose(f) == 0;
+	return !ferror(f);
 }
 
 void psx_debug_state(char *b, int n)
