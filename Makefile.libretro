@@ -320,6 +320,12 @@ else ifeq ($(platform), psl1ght)
 	USE_ASYNC_CDROM = 1
   libpcsxcore/cdrom-async.o frontend/libretro.o: CFLAGS += -DHAVE_CDROM
 	USE_ASYNC_GPU = 1
+	# Lightrec's threaded compiler, switched on or off at run time by the front end;
+	# its few POSIX thread calls come from libpcsxcore/lightrec/ps3 (lv2 threads)
+	LIGHTREC_THREADED_COMPILER := 1
+	CFLAGS += -DLIGHTREC_THREADED_RUNTIME=1
+  deps/lightrec/%.o: CFLAGS += -Ilibpcsxcore/lightrec/ps3
+	OBJS += libpcsxcore/lightrec/ps3/pthread.o
 	# pcsxr-threads.c has its own lv2 thread code
 	NO_FEATURES_CPU = 1
 	USE_ASYNC_SPU = 0

@@ -6,7 +6,16 @@
 #ifndef __LIGHTREC_CONFIG_H__
 #define __LIGHTREC_CONFIG_H__
 
+#if LIGHTREC_THREADED_RUNTIME && LIGHTREC_ENABLE_THREADED_COMPILER
+/* PS3: built with the threaded compiler, switched on or off at run time (a front-end
+   setting; lightrec_plugin_set_threaded() restarts Lightrec when it changes) */
+extern int lightrec_threaded_compiler;
+#define ENABLE_THREADED_COMPILER lightrec_threaded_compiler
+#define LIGHTREC_THREADED_BUILT 1
+#else
 #define ENABLE_THREADED_COMPILER LIGHTREC_ENABLE_THREADED_COMPILER
+#define LIGHTREC_THREADED_BUILT LIGHTREC_ENABLE_THREADED_COMPILER
+#endif
 #define ENABLE_FIRST_PASS 1
 #define ENABLE_DISASSEMBLER LIGHTREC_ENABLE_DISASSEMBLER
 #define ENABLE_CODE_BUFFER 1

@@ -116,11 +116,19 @@ static void lightrec_cancel_list(struct recompiler *rec)
 	}
 }
 
+extern unsigned int lightrec_code_flushes;
+
 static void lightrec_flush_code_buffer(struct lightrec_state *state, void *d)
 {
 	struct recompiler *rec = d;
 
-	lightrec_remove_outdated_blocks(state->block_cache, NULL);
+	/* Runs from the reaper, outside block code, with the compiler idle: free
+	 * every block, as the single-threaded compiler does when the buffer is full
+	 * (lightrec_remove_outdated_blocks() alone rarely frees anything: its age
+	 * test compares against a cycle counter reset at every exit, so the buffer
+	 * stayed full and new blocks were only ever interpreted). */
+	lightrec_free_all_blocks_except(state->block_cache, NULL);
+	lightrec_code_flushes++;
 	rec->must_flush = false;
 }
 

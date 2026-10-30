@@ -12,7 +12,7 @@
 #include "lightrec.h"
 #include "regcache.h"
 
-#if ENABLE_THREADED_COMPILER
+#if LIGHTREC_THREADED_BUILT
 #include <stdatomic.h>
 #endif
 
@@ -124,7 +124,7 @@ struct block {
 	u32 precompile_date;
 	unsigned int code_size;
 	u16 nb_ops;
-#if ENABLE_THREADED_COMPILER
+#if LIGHTREC_THREADED_BUILT
 	_Atomic u8 flags;
 #else
 	u8 flags;
@@ -351,7 +351,7 @@ static inline s16 s16_max(s16 a, s16 b)
 
 static inline _Bool block_has_flag(struct block *block, u8 flag)
 {
-#if ENABLE_THREADED_COMPILER
+#if LIGHTREC_THREADED_BUILT
 	return atomic_load_explicit(&block->flags, memory_order_relaxed) & flag;
 #else
 	return block->flags & flag;
@@ -360,7 +360,7 @@ static inline _Bool block_has_flag(struct block *block, u8 flag)
 
 static inline u8 block_set_flags(struct block *block, u8 mask)
 {
-#if ENABLE_THREADED_COMPILER
+#if LIGHTREC_THREADED_BUILT
 	return atomic_fetch_or_explicit(&block->flags, mask,
 					memory_order_relaxed);
 #else
@@ -374,7 +374,7 @@ static inline u8 block_set_flags(struct block *block, u8 mask)
 
 static inline u8 block_clear_flags(struct block *block, u8 mask)
 {
-#if ENABLE_THREADED_COMPILER
+#if LIGHTREC_THREADED_BUILT
 	return atomic_fetch_and_explicit(&block->flags, ~mask,
 					 memory_order_relaxed);
 #else

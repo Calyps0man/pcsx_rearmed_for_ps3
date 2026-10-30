@@ -22,7 +22,7 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <limits.h>
-#if ENABLE_THREADED_COMPILER
+#if LIGHTREC_THREADED_BUILT
 #include <stdatomic.h>
 #endif
 #include <stdbool.h>

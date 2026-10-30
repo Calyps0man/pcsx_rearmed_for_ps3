@@ -713,6 +713,7 @@ static void lightrec_plugin_apply_config()
 static void lightrec_plugin_shutdown(void)
 {
 	lightrec_destroy(lightrec_state);
+	lightrec_state = NULL;
 
 	if (!LIGHTREC_CUSTOM_MAP) {
 #if defined(__lv2ppu__)
@@ -724,6 +725,29 @@ static void lightrec_plugin_shutdown(void)
 #endif
 	}
 }
+
+#if LIGHTREC_THREADED_RUNTIME && LIGHTREC_ENABLE_THREADED_COMPILER
+int lightrec_threaded_compiler = 1;
+
+/* The front end's setting, before a game is loaded: Lightrec compiles new blocks on
+ * a second thread (they run in Lightrec's interpreter until compiled, so a burst of
+ * new code no longer holds up the frame), or on the emulation thread. Lightrec is
+ * restarted when it changes; the game's reset rebuilds its blocks anyway. */
+void lightrec_plugin_set_threaded(int on)
+{
+	on = !!on;
+	if (on == lightrec_threaded_compiler)
+		return;
+	if (lightrec_state && psxCpu == &psxRec) {
+		lightrec_plugin_shutdown();
+		lightrec_threaded_compiler = on;
+		lightrec_plugin_init();
+	} else {
+		lightrec_threaded_compiler = on;
+	}
+	SysPrintf("lightrec: blocks compiled %s\n", on ? "on a second thread" : "on the emulation thread");
+}
+#endif
 
 static void lightrec_plugin_reset(void)
 {
