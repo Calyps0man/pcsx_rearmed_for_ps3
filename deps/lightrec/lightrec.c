@@ -119,6 +119,14 @@ static const struct lightrec_mem_map_ops lightrec_default_ops = {
 
 struct lightrec_dbg lightrec_dbg;
 
+/* blocks run by the interpreter, blocks compiled (by any thread), blocks found */
+void lightrec_debug_counts(u32 *c)
+{
+	c[0] = lightrec_dbg.n_interp;
+	c[1] = lightrec_dbg.n_comp;
+	c[2] = lightrec_dbg.n_precomp;
+}
+
 unsigned int lightrec_bad_accesses;
 u32 lightrec_bad_access_addr, lightrec_bad_access_pc;
 

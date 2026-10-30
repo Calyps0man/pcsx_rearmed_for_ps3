@@ -11,6 +11,7 @@
  ***************************************************************************/
 
 #include <stdalign.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include "system.h"
@@ -320,7 +321,28 @@ int cdra_prefetch(unsigned char m, unsigned char s, unsigned char f, int is_cdda
    return ret;
 }
 
+/* time spent reading sectors on the emulation thread (timebase ticks, PowerPC) and
+   the number of reads, for front ends that report slow frames */
+uint64_t cdra_prof_ticks;
+unsigned int cdra_prof_reads;
+
+static int cdra_do_read_(const unsigned char *time, int is_cdda,
+      void *buf, void *buf_sub);
 static int cdra_do_read(const unsigned char *time, int is_cdda,
+      void *buf, void *buf_sub)
+{
+#if defined(__powerpc__) || defined(__ppc__) || defined(__PPC__)
+   uint64_t t0 = __builtin_ppc_get_timebase();
+   int ret = cdra_do_read_(time, is_cdda, buf, buf_sub);
+   cdra_prof_ticks += __builtin_ppc_get_timebase() - t0;
+#else
+   int ret = cdra_do_read_(time, is_cdda, buf, buf_sub);
+#endif
+   cdra_prof_reads++;
+   return ret;
+}
+
+static int cdra_do_read_(const unsigned char *time, int is_cdda,
       void *buf, void *buf_sub)
 {
    u32 lba = MSF2SECT(time[0], time[1], time[2]);
