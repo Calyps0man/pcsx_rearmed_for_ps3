@@ -323,7 +323,7 @@ else ifeq ($(platform), psl1ght)
 	# Lightrec's threaded compiler, switched on or off at run time by the front end;
 	# its few POSIX thread calls come from libpcsxcore/lightrec/ps3 (lv2 threads)
 	LIGHTREC_THREADED_COMPILER := 1
-	CFLAGS += -DLIGHTREC_THREADED_RUNTIME=1
+	CFLAGS += -DLIGHTREC_THREADED_RUNTIME=1 -DLIGHTREC_NB_CPUS=2
   deps/lightrec/%.o: CFLAGS += -Ilibpcsxcore/lightrec/ps3
 	OBJS += libpcsxcore/lightrec/ps3/pthread.o
 	# pcsxr-threads.c has its own lv2 thread code

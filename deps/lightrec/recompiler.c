@@ -51,7 +51,12 @@ static unsigned int get_processors_count(void)
 {
 	int nb = 1;
 
-#if defined(PTW32_VERSION)
+#if defined(LIGHTREC_NB_CPUS)
+	/* set by the build where the C library cannot tell (PS3: two PPU hardware
+	   threads, sysconf() answers 1). With 1, every repeated request for a
+	   queued block makes the emulation thread wait for the compiler. */
+	nb = LIGHTREC_NB_CPUS;
+#elif defined(PTW32_VERSION)
         nb = pthread_num_processors_np();
 #elif defined(__APPLE__) || defined(__FreeBSD__)
         int count;
