@@ -119,6 +119,13 @@ void lightrec_reaper_reap(struct reaper *reaper)
 	struct reaper_elm *reaper_elm;
 	struct slist_elm *elm;
 
+	/* Called each time the emulator gets control back (thousands of times per
+	 * frame) and the list is nearly always empty: look without the mutex,
+	 * which is a system call on some hosts (PS3). Something added while we
+	 * look is reaped on the next call. */
+	if (!__atomic_load_n(&reaper->reap_list.next, __ATOMIC_ACQUIRE))
+		return;
+
 	pthread_mutex_lock(&reaper->mutex);
 
 	while (lightrec_reaper_can_reap(reaper) &&
