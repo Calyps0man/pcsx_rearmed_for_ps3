@@ -147,12 +147,12 @@
     12, /* ldi_c */
     4,	/* ldr_uc */
     8,	/* ldi_uc */
-    4,	/* ldr_s */
-    8,	/* ldi_s */
+    8,	/* ldr_s */
+    12,	/* ldi_s */
     4,	/* ldr_us */
     8,	/* ldi_us */
-    4,	/* ldr_i */
-    8,	/* ldi_i */
+    8,	/* ldr_i */
+    12,	/* ldi_i */
     0,	/* ldr_ui */
     0,	/* ldi_ui */
     0,	/* ldr_l */
@@ -161,12 +161,12 @@
     16, /* ldxi_c */
     4,	/* ldxr_uc */
     12, /* ldxi_uc */
-    4,	/* ldxr_s */
-    12, /* ldxi_s */
+    8,	/* ldxr_s */
+    16, /* ldxi_s */
     4,	/* ldxr_us */
     12, /* ldxi_us */
-    4,	/* ldxr_i */
-    12, /* ldxi_i */
+    8,	/* ldxr_i */
+    16, /* ldxi_i */
     0,	/* ldxr_ui */
     0,	/* ldxi_ui */
     0,	/* ldxr_l */
@@ -745,12 +745,12 @@
     12, /* ldi_c */
     4,	/* ldr_uc */
     8,	/* ldi_uc */
-    4,	/* ldr_s */
-    8,	/* ldi_s */
+    8,	/* ldr_s */
+    12,	/* ldi_s */
     4,	/* ldr_us */
     8,	/* ldi_us */
-    4,	/* ldr_i */
-    8,	/* ldi_i */
+    8,	/* ldr_i */
+    12,	/* ldi_i */
     0,	/* ldr_ui */
     0,	/* ldi_ui */
     0,	/* ldr_l */
@@ -759,12 +759,12 @@
     16, /* ldxi_c */
     4,	/* ldxr_uc */
     12, /* ldxi_uc */
-    4,	/* ldxr_s */
-    12, /* ldxi_s */
+    8,	/* ldxr_s */
+    16, /* ldxi_s */
     4,	/* ldxr_us */
     12, /* ldxi_us */
-    4,	/* ldxr_i */
-    12, /* ldxi_i */
+    8,	/* ldxr_i */
+    16, /* ldxi_i */
     0,	/* ldxr_ui */
     0,	/* ldxi_ui */
     0,	/* ldxr_l */
@@ -1342,12 +1342,12 @@
     28, /* ldi_c */
     4,	/* ldr_uc */
     24, /* ldi_uc */
-    4,	/* ldr_s */
-    24, /* ldi_s */
+    8,	/* ldr_s */
+    28, /* ldi_s */
     4,	/* ldr_us */
     24, /* ldi_us */
-    4,	/* ldr_i */
-    24, /* ldi_i */
+    8,	/* ldr_i */
+    28, /* ldi_i */
     4,	/* ldr_ui */
     24, /* ldi_ui */
     4,	/* ldr_l */
@@ -1356,12 +1356,12 @@
     16, /* ldxi_c */
     4,	/* ldxr_uc */
     12, /* ldxi_uc */
-    4,	/* ldxr_s */
-    12, /* ldxi_s */
+    8,	/* ldxr_s */
+    16, /* ldxi_s */
     4,	/* ldxr_us */
     12, /* ldxi_us */
-    4,	/* ldxr_i */
-    12, /* ldxi_i */
+    8,	/* ldxr_i */
+    16, /* ldxi_i */
     4,	/* ldxr_ui */
     12, /* ldxi_ui */
     4,	/* ldxr_l */
@@ -1938,12 +1938,12 @@
     28, /* ldi_c */
     4,	/* ldr_uc */
     24, /* ldi_uc */
-    4,	/* ldr_s */
-    24, /* ldi_s */
+    8,	/* ldr_s */
+    28, /* ldi_s */
     4,	/* ldr_us */
     24, /* ldi_us */
-    4,	/* ldr_i */
-    24, /* ldi_i */
+    8,	/* ldr_i */
+    28, /* ldi_i */
     4,	/* ldr_ui */
     24, /* ldi_ui */
     4,	/* ldr_l */
@@ -1952,12 +1952,12 @@
     16, /* ldxi_c */
     4,	/* ldxr_uc */
     12, /* ldxi_uc */
-    4,	/* ldxr_s */
-    12, /* ldxi_s */
+    8,	/* ldxr_s */
+    16, /* ldxi_s */
     4,	/* ldxr_us */
     12, /* ldxi_us */
-    4,	/* ldxr_i */
-    12, /* ldxi_i */
+    8,	/* ldxr_i */
+    16, /* ldxi_i */
     4,	/* ldxr_ui */
     12, /* ldxi_ui */
     4,	/* ldxr_l */

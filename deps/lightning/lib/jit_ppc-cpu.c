@@ -295,6 +295,20 @@ static void _FXS(jit_state_t*,int,int,int,int,int,int,int);
 #  define LWA(d,a,s)			FDs(58,d,a,s|2)
 #  define LWAUX(d,a,b)			FX(31,d,a,b,373)
 #  define LWAX(d,a,b)			FX(31,d,a,b,341)
+#  if defined(__lv2ppu__) || defined(LIGHTNING_CELL)
+/* The Cell PPU microcodes the sign-extending loads (lha, lhax, lwa, lwax: about
+ * 11 cycles and a pipeline stall each, IBM's Cell performance notes); a plain
+ * load and an extend are two cheap instructions (the size tables in
+ * jit_ppc-sz.c allow for the extra one). */
+#    undef LHA
+#    undef LHAX
+#    undef LWA
+#    undef LWAX
+#    define LHA(d,a,s)		do { LHZ(d,a,s); EXTSH(d,d); } while (0)
+#    define LHAX(d,a,b)		do { LHZX(d,a,b); EXTSH(d,d); } while (0)
+#    define LWA(d,a,s)		do { LWZ(d,a,s); EXTSW(d,d); } while (0)
+#    define LWAX(d,a,b)		do { LWZX(d,a,b); EXTSW(d,d); } while (0)
+#  endif
 #  define LWZ(d,a,s)			FDs(32,d,a,s)
 #  define LWZU(d,a,s)			FDs(33,d,a,s)
 #  define LWZUX(d,a,b)			FX(31,d,a,b,55)
@@ -563,9 +577,17 @@ static void _extr_u(jit_state_t*,jit_int32_t,jit_int32_t,jit_word_t,jit_word_t);
 #  define depr(r0,r1,i0,i1)		_depr(_jit,r0,r1,i0,i1)
 static void _depr(jit_state_t*,jit_int32_t,jit_int32_t,jit_word_t,jit_word_t);
 #  define extr_c(r0,r1)			EXTSB(r0,r1)
-#  define extr_uc(r0,r1)		ANDI_(r0,r1,0xff)
+#  if defined(__lv2ppu__) || defined(LIGHTNING_CELL)	/* andi. is microcoded on the Cell PPU */
+#    define extr_uc(r0,r1)		RLWINM(r0,r1,0,24,31)
+#  else
+#    define extr_uc(r0,r1)		ANDI_(r0,r1,0xff)
+#  endif
 #  define extr_s(r0,r1)			EXTSH(r0,r1)
-#  define extr_us(r0,r1)		ANDI_(r0,r1,0xffff)
+#  if defined(__lv2ppu__) || defined(LIGHTNING_CELL)
+#    define extr_us(r0,r1)		RLWINM(r0,r1,0,16,31)
+#  else
+#    define extr_us(r0,r1)		ANDI_(r0,r1,0xffff)
+#  endif
 #  if __WORDSIZE == 64
 #    define extr_i(r0,r1)		EXTSW(r0,r1)
 #    define extr_ui(r0,r1)		CLRLDI(r0,r1,32)
@@ -1813,6 +1835,24 @@ static void
 _andi(jit_state_t *_jit, jit_int32_t r0, jit_int32_t r1, jit_word_t i0)
 {
     jit_int32_t		reg, offt;
+#  if defined(__lv2ppu__) || defined(LIGHTNING_CELL)
+    /* andi./andis. record to CR0, which the Cell PPU microcodes (11 cycles and a
+     * stall): use rlwinm for a run of ones in the low word (it clears the high
+     * word like andi. does), and/or a register otherwise */
+    {
+	jit_uword_t	u = (jit_uword_t)i0;
+	if (u && u <= 0xffffffffUL && !((u + (u & -u)) & ((u + (u & -u)) - 1))) {
+	    offt = __builtin_ctzl(u);
+	    RLWINM(r0, r1, 0, 32 - offt - __builtin_popcountl(u), 31 - offt);
+	    return;
+	}
+	reg = jit_get_reg(jit_class_gpr);
+	movi(rn(reg), i0);
+	AND(r0, r1, rn(reg));
+	jit_unget_reg(reg);
+	return;
+    }
+#  endif
     if (can_zero_extend_short_p(i0))
 	ANDI_(r0, r1, i0);
     else if (can_zero_extend_int_p(i0) && !(i0 & 0x0000ffff))
