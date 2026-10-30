@@ -136,6 +136,9 @@ void lightrec_debug_counts(u32 *c, u64 *t)
 	t[7] = lightrec_dbg.t_reap;
 	c[4] = lightrec_dbg.n_add_fast;
 	c[5] = lightrec_dbg.n_add_slow;
+	c[6] = lightrec_dbg.n_relink_null;
+	c[7] = lightrec_dbg.n_relink_stale;
+	c[8] = lightrec_dbg.n_loop;
 }
 
 unsigned int lightrec_bad_accesses;
@@ -818,6 +821,44 @@ static struct block * lightrec_get_block_(struct lightrec_state *state, u32 pc)
 	return block;
 }
 
+/*
+ * Threaded compiler: the dispatcher found a compiled block for a code LUT entry
+ * that does not point to it (cleared by a store to RAM nearby, or still
+ * pointing to the dispatcher). Without this, every later visit came back here
+ * (hundreds of thousands of times per frame while a game loaded new code). The
+ * single-threaded compiler writes the entry in that case; here the compiler
+ * thread may be killing the block (covered by a new one: it writes that
+ * block's entry point instead) or replacing its code at the same time, so the
+ * entry is written, then the block re-checked after a full barrier (the
+ * compiler thread has one before its own writes): if it changed, the entry is
+ * cleared, which only costs another lookup. A block waiting to be compiled
+ * again keeps running its current code meanwhile (as the dispatcher does), so
+ * its entry is written too: the compiler thread replaces it with the new code.
+ */
+static void lightrec_relink(struct lightrec_state *state, struct block *block,
+			    u32 pc, void *func)
+{
+	u32 offset = lut_offset(pc);
+	void *cur = lut_read(state, offset);
+
+	if (cur == func || func != block->function ||
+	    block_has_flag(block, BLOCK_IS_DEAD))
+		return;
+
+	lut_write(state, offset, func);
+	__atomic_thread_fence(__ATOMIC_SEQ_CST);
+
+	if (block->function != func || block_has_flag(block, BLOCK_IS_DEAD)) {
+		lut_write(state, offset, NULL);
+		return;
+	}
+
+	if (cur)
+		lightrec_dbg.n_relink_stale++;
+	else
+		lightrec_dbg.n_relink_null++;
+}
+
 static void * get_next_block_func_(struct lightrec_state *state, u32 pc)
 {
 	struct block *block;
@@ -866,8 +907,11 @@ static void * get_next_block_func_(struct lightrec_state *state, u32 pc)
 		else
 			func = block->function;
 
-		if (likely(func))
+		if (likely(func)) {
+			if (ENABLE_THREADED_COMPILER)
+				lightrec_relink(state, block, pc, func);
 			break;
+		}
 
 		if (unlikely(block_has_flag(block, BLOCK_NEVER_COMPILE))) {
 			pc = lightrec_emulate_block(state, block, pc);
@@ -1843,6 +1887,10 @@ static int lightrec_compile_block_(struct lightrec_cstate *cstate,
 	block->function = new_fn;
 	block_clear_flags(block, BLOCK_SHOULD_RECOMPILE);
 
+	/* (pairs with lightrec_relink() on the emulation thread) */
+	if (ENABLE_THREADED_COMPILER)
+		__atomic_thread_fence(__ATOMIC_SEQ_CST);
+
 	/* Add compiled function to the LUT */
 	lut_write(state, lut_offset(block->pc), block->function);
 
@@ -1877,6 +1925,11 @@ static int lightrec_compile_block_(struct lightrec_cstate *cstate,
 		if (block2)
 			lightrec_recompiler_remove(state->rec, block2);
 	}
+
+	/* the blocks above are marked dead before their entries are taken over
+	 * (pairs with lightrec_relink() on the emulation thread) */
+	if (ENABLE_THREADED_COMPILER)
+		__atomic_thread_fence(__ATOMIC_SEQ_CST);
 
 	for (i = 0; i < cstate->nb_targets; i++) {
 		target = &cstate->targets[i];

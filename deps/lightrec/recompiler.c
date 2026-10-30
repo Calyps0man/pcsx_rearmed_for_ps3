@@ -413,11 +413,16 @@ static int lightrec_recompiler_add_(struct recompiler *rec, struct block *block)
 		pc1 = kunseg(block_rec->block->pc);
 		pc2 = kunseg(block->pc);
 		if (pc2 >= pc1 && pc2 < pc1 + block_rec->block->nb_ops * 4) {
-			/* The block we want to compile is already covered by
-			 * another one in the queue - increment its counter to
-			 * increase its priority */
+			/* The block we want to compile is covered by another
+			 * one in the queue - increment that one's counter to
+			 * increase its priority, and queue this one too: left
+			 * out, it was asked for again (lock, queue walk) at
+			 * each visit while the other one waited, which is
+			 * hundreds of milliseconds while a game loads new code,
+			 * and the other one's compile only takes it over if it
+			 * is one of its branch targets. */
 			block_rec->requests++;
-			goto out_unlock;
+			continue;
 		}
 	}
 

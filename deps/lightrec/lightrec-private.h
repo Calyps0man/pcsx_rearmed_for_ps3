@@ -230,6 +230,8 @@ struct lightrec_dbg {
 	/* time in the compile queue and reaper calls (locks, waits for the compiler) */
 	volatile u64 t_queue, t_add, t_remove, t_reap;
 	volatile u32 n_add_fast, n_add_slow;
+	/* code LUT entries written by the dispatcher (threaded compiler): were empty, were stale */
+	volatile u32 n_relink_null, n_relink_stale;
 };
 static inline u64 lightrec_ticks(void)
 {
