@@ -120,11 +120,17 @@ static const struct lightrec_mem_map_ops lightrec_default_ops = {
 struct lightrec_dbg lightrec_dbg;
 
 /* blocks run by the interpreter, blocks compiled (by any thread), blocks found */
-void lightrec_debug_counts(u32 *c)
+void lightrec_debug_counts(u32 *c, u64 *t)
 {
 	c[0] = lightrec_dbg.n_interp;
 	c[1] = lightrec_dbg.n_comp;
 	c[2] = lightrec_dbg.n_precomp;
+	c[3] = lightrec_dbg.n_outdated;
+	t[0] = lightrec_dbg.t_lookup;
+	t[1] = lightrec_dbg.t_precomp;
+	t[2] = lightrec_dbg.t_interp;
+	t[3] = lightrec_dbg.t_comp;
+	t[4] = lightrec_dbg.t_queue;
 }
 
 unsigned int lightrec_bad_accesses;
@@ -747,13 +753,23 @@ static void lightrec_cp_cb(struct lightrec_state *state, u32 arg)
 	LR_DBG_LEAVE();
 }
 
+static struct block * lightrec_get_block_(struct lightrec_state *state, u32 pc);
 static struct block * lightrec_get_block(struct lightrec_state *state, u32 pc)
+{
+	u64 t0 = lightrec_ticks();
+	struct block *block = lightrec_get_block_(state, pc);
+	lightrec_dbg.t_lookup += lightrec_ticks() - t0;
+	return block;
+}
+
+static struct block * lightrec_get_block_(struct lightrec_state *state, u32 pc)
 {
 	struct block *block = lightrec_find_block(state->block_cache, pc);
 	u8 old_flags;
 
 	if (block && lightrec_block_is_outdated(state, block)) {
 		pr_debug("Block at "PC_FMT" is outdated!\n", block->pc);
+		lightrec_dbg.n_outdated++;
 
 		old_flags = block_set_flags(block, BLOCK_IS_DEAD);
 		if (!(old_flags & BLOCK_IS_DEAD)) {
@@ -779,8 +795,10 @@ static struct block * lightrec_get_block(struct lightrec_state *state, u32 pc)
 	if (!block) {
 		{
 			LR_DBG_ENTER(LR_PRECOMPILE, pc, 0);
+			u64 t0 = lightrec_ticks();
 			lightrec_dbg.n_precomp++;
 			block = lightrec_precompile_block(state, pc);
+			lightrec_dbg.t_precomp += lightrec_ticks() - t0;
 			LR_DBG_LEAVE();
 		}
 		if (!block) {
@@ -1670,8 +1688,10 @@ int lightrec_compile_block(struct lightrec_cstate *cstate,
 	int ret;
 	LR_DBG_ENTER(LR_COMPILE, block->pc, 0);
 
+	u64 t0 = lightrec_ticks();
 	lightrec_dbg.n_comp++;
 	ret = lightrec_compile_block_(cstate, block);
+	__atomic_fetch_add(&lightrec_dbg.t_comp, lightrec_ticks() - t0, __ATOMIC_RELAXED);
 	LR_DBG_LEAVE();
 	return ret;
 }

@@ -218,7 +218,22 @@ void remove_from_code_lut(struct blockcache *cache, struct block *block);
 struct lightrec_dbg {
 	volatile u32 where, pc, arg;
 	volatile u32 n_exec, n_next, n_loop, n_c, n_interp, n_comp, n_precomp;
+	/* blocks found changed (code overwritten) and dropped; time (timebase ticks,
+	   PowerPC hosts) spent finding blocks (incl. checking and precompiling them),
+	   precompiling, interpreting (emulation thread) and compiling (any thread) */
+	volatile u32 n_outdated;
+	volatile u64 t_lookup, t_precomp, t_interp, t_comp;
+	/* time in the compile queue and reaper calls (locks, waits for the compiler) */
+	volatile u64 t_queue;
 };
+static inline u64 lightrec_ticks(void)
+{
+#if defined(__powerpc__) || defined(__ppc__) || defined(__PPC__)
+	return __builtin_ppc_get_timebase();
+#else
+	return 0;
+#endif
+}
 extern struct lightrec_dbg lightrec_dbg;
 enum {
 	LR_OUTSIDE, LR_EXECUTE, LR_NATIVE, LR_NEXT_BLOCK, LR_INTERP, LR_COMPILE,

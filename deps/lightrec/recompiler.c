@@ -328,7 +328,16 @@ void lightrec_free_recompiler(struct recompiler *rec)
 	lightrec_free(rec->state, MEM_FOR_LIGHTREC, sizeof(*rec), rec);
 }
 
+static int lightrec_recompiler_add_(struct recompiler *rec, struct block *block);
 int lightrec_recompiler_add(struct recompiler *rec, struct block *block)
+{
+	u64 t0 = lightrec_ticks();
+	int ret = lightrec_recompiler_add_(rec, block);
+	__atomic_fetch_add(&lightrec_dbg.t_queue, lightrec_ticks() - t0, __ATOMIC_RELAXED);
+	return ret;
+}
+
+static int lightrec_recompiler_add_(struct recompiler *rec, struct block *block)
 {
 	struct slist_elm *elm;
 	struct block_rec *block_rec;
@@ -412,7 +421,15 @@ out_unlock:
 	return ret;
 }
 
+static void lightrec_recompiler_remove_(struct recompiler *rec, struct block *block);
 void lightrec_recompiler_remove(struct recompiler *rec, struct block *block)
+{
+	u64 t0 = lightrec_ticks();
+	lightrec_recompiler_remove_(rec, block);
+	__atomic_fetch_add(&lightrec_dbg.t_queue, lightrec_ticks() - t0, __ATOMIC_RELAXED);
+}
+
+static void lightrec_recompiler_remove_(struct recompiler *rec, struct block *block)
 {
 	struct block_rec *block_rec;
 	struct slist_elm *elm;

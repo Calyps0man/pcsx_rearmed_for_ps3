@@ -123,9 +123,12 @@ void lightrec_reaper_reap(struct reaper *reaper)
 	 * frame) and the list is nearly always empty: look without the mutex,
 	 * which is a system call on some hosts (PS3). Something added while we
 	 * look is reaped on the next call. */
+	u64 t0;
+
 	if (!__atomic_load_n(&reaper->reap_list.next, __ATOMIC_ACQUIRE))
 		return;
 
+	t0 = lightrec_ticks();
 	pthread_mutex_lock(&reaper->mutex);
 
 	while (lightrec_reaper_can_reap(reaper) &&
@@ -147,6 +150,7 @@ void lightrec_reaper_reap(struct reaper *reaper)
 	}
 
 	pthread_mutex_unlock(&reaper->mutex);
+	__atomic_fetch_add(&lightrec_dbg.t_queue, lightrec_ticks() - t0, __ATOMIC_RELAXED);
 }
 
 void lightrec_reaper_pause(struct reaper *reaper)

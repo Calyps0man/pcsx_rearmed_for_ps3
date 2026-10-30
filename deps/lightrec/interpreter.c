@@ -1229,8 +1229,12 @@ u32 lightrec_emulate_block(struct lightrec_state *state, struct block *block, u3
 		u32 ret;
 		LR_DBG_ENTER(LR_INTERP, pc, block->pc);
 
+		static int depth;
+		u64 t0 = depth++ ? 0 : lightrec_ticks();
 		lightrec_dbg.n_interp++;
 		ret = lightrec_emulate_block_list(state, block, offset);
+		if (!--depth)
+			lightrec_dbg.t_interp += lightrec_ticks() - t0;
 		LR_DBG_LEAVE();
 		return ret;
 	}
