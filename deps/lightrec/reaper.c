@@ -150,7 +150,9 @@ void lightrec_reaper_reap(struct reaper *reaper)
 	}
 
 	pthread_mutex_unlock(&reaper->mutex);
-	__atomic_fetch_add(&lightrec_dbg.t_queue, lightrec_ticks() - t0, __ATOMIC_RELAXED);
+	t0 = lightrec_ticks() - t0;
+	__atomic_fetch_add(&lightrec_dbg.t_queue, t0, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&lightrec_dbg.t_reap, t0, __ATOMIC_RELAXED);
 }
 
 void lightrec_reaper_pause(struct reaper *reaper)

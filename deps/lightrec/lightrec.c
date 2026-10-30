@@ -131,6 +131,11 @@ void lightrec_debug_counts(u32 *c, u64 *t)
 	t[2] = lightrec_dbg.t_interp;
 	t[3] = lightrec_dbg.t_comp;
 	t[4] = lightrec_dbg.t_queue;
+	t[5] = lightrec_dbg.t_add;
+	t[6] = lightrec_dbg.t_remove;
+	t[7] = lightrec_dbg.t_reap;
+	c[4] = lightrec_dbg.n_add_fast;
+	c[5] = lightrec_dbg.n_add_slow;
 }
 
 unsigned int lightrec_bad_accesses;
@@ -1567,6 +1572,9 @@ static struct block * lightrec_precompile_block(struct lightrec_state *state,
 	block->code = code;
 	block->next = NULL;
 	block->flags = 0;
+#if LIGHTREC_THREADED_BUILT
+	block->queue_requests = 0;
+#endif
 	block->code_size = 0;
 	block->precompile_date = state->current_cycle;
 	block->nb_ops = length / sizeof(u32);

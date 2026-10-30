@@ -84,6 +84,7 @@
 #define BLOCK_IS_MEMSET		BIT(4)
 #define BLOCK_NO_OPCODE_LIST	BIT(5)
 #define BLOCK_PRELOAD_PC	BIT(6)
+#define BLOCK_IN_QUEUE		BIT(7)	/* waiting in the threaded compiler's queue (or being compiled) */
 
 #define RAM_SIZE	0x200000
 #define BIOS_SIZE	0x80000
@@ -125,6 +126,9 @@ struct block {
 	unsigned int code_size;
 	u16 nb_ops;
 #if LIGHTREC_THREADED_BUILT
+	/* requests for the block while it waits in the compile queue, counted
+	   without the queue's lock (adds to its priority) */
+	unsigned int queue_requests;
 	_Atomic u8 flags;
 #else
 	u8 flags;
@@ -224,7 +228,8 @@ struct lightrec_dbg {
 	volatile u32 n_outdated;
 	volatile u64 t_lookup, t_precomp, t_interp, t_comp;
 	/* time in the compile queue and reaper calls (locks, waits for the compiler) */
-	volatile u64 t_queue;
+	volatile u64 t_queue, t_add, t_remove, t_reap;
+	volatile u32 n_add_fast, n_add_slow;
 };
 static inline u64 lightrec_ticks(void)
 {
