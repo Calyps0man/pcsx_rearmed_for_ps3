@@ -79,27 +79,49 @@ jit_get_memory_functions(jit_alloc_func_ptr *alloc_ptr,
     *free_ptr = jit_free_ptr;
 }
 
+/* time spent here (PowerPC timebase ticks), calls and bytes cleared, for the
+ * front end's slow-frame log (all threads together) */
+unsigned long long jit_mem_ticks, jit_mem_bytes;
+unsigned int jit_mem_calls;
+#if defined(__powerpc__) || defined(__ppc__) || defined(__PPC__)
+#  define JIT_MEM_T0()	unsigned long long _t0 = __builtin_ppc_get_timebase()
+#  define JIT_MEM_T1()	__atomic_fetch_add(&jit_mem_ticks, __builtin_ppc_get_timebase() - _t0, __ATOMIC_RELAXED)
+#else
+#  define JIT_MEM_T0()	do { } while (0)
+#  define JIT_MEM_T1()	do { } while (0)
+#endif
+
 void
 jit_alloc(jit_pointer_t *ptr, jit_word_t size)
 {
+    JIT_MEM_T0();
     *ptr = (*jit_alloc_ptr)(size);
     memset(*ptr, 0, size);
+    JIT_MEM_T1();
+    __atomic_fetch_add(&jit_mem_calls, 1, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&jit_mem_bytes, size, __ATOMIC_RELAXED);
 }
 
 void
 jit_realloc(jit_pointer_t *ptr, jit_word_t old_size, jit_word_t new_size)
 {
+    JIT_MEM_T0();
     *ptr = (*jit_realloc_ptr)(*ptr, new_size);
     if (old_size < new_size)
 	memset((jit_int8_t*)*ptr + old_size, 0, new_size - old_size);
+    JIT_MEM_T1();
+    __atomic_fetch_add(&jit_mem_calls, 1, __ATOMIC_RELAXED);
 }
 
 void
 jit_free(jit_pointer_t *ptr)
 {
     if (*ptr) {
+	JIT_MEM_T0();
 	(*jit_free_ptr)(*ptr);
 	*ptr = NULL;
+	JIT_MEM_T1();
+	__atomic_fetch_add(&jit_mem_calls, 1, __ATOMIC_RELAXED);
     }
 }
 

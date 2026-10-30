@@ -232,6 +232,11 @@ struct lightrec_dbg {
 	volatile u32 n_add_fast, n_add_slow;
 	/* code LUT entries written by the dispatcher (threaded compiler): were empty, were stale */
 	volatile u32 n_relink_null, n_relink_stale;
+	/* compile stages (timebase ticks, compiling thread): setup, building
+	   Lightning's code, Lightning's optimizer, emitting, the rest (LUT,
+	   reaper, cleanup); instructions compiled */
+	volatile u64 t_cstage[5];
+	volatile u32 n_comp_ops;
 };
 static inline u64 lightrec_ticks(void)
 {

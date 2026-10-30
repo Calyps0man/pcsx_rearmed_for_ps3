@@ -139,6 +139,11 @@ void lightrec_debug_counts(u32 *c, u64 *t)
 	c[6] = lightrec_dbg.n_relink_null;
 	c[7] = lightrec_dbg.n_relink_stale;
 	c[8] = lightrec_dbg.n_loop;
+	c[9] = lightrec_dbg.n_comp_ops;
+	t[8] = lightrec_dbg.t_cstage[0];
+	t[9] = lightrec_dbg.t_cstage[1];
+	t[10] = lightrec_dbg.t_cstage[2];
+	t[11] = lightrec_dbg.t_cstage[3];
 }
 
 unsigned int lightrec_bad_accesses;
@@ -1012,7 +1017,9 @@ static void * lightrec_emit_code(struct lightrec_state *state,
 	jit_word_t code_size, new_code_size;
 	void *code;
 
+	u64 t_r = lightrec_ticks();
 	jit_realize();
+	lightrec_dbg.t_cstage[2] += lightrec_ticks() - t_r;
 
 	if (ENABLE_DISASSEMBLER)
 		jit_set_data(lightning_code_data, sizeof(lightning_code_data), 0);
@@ -1753,6 +1760,7 @@ static int lightrec_compile_block_(struct lightrec_cstate *cstate,
 {
 	struct block *dead_blocks[ARRAY_SIZE(cstate->targets)];
 	u32 was_dead[ARRAY_SIZE(cstate->targets) / 8];
+	u64 t_stage = lightrec_ticks(), t_now, t_real0;
 	struct lightrec_state *state = cstate->state;
 	struct lightrec_branch_target *target;
 	bool fully_tagged = false;
@@ -1814,6 +1822,11 @@ static int lightrec_compile_block_(struct lightrec_cstate *cstate,
 		lightrec_free_reg(cstate->reg_cache, tmp);
 	}
 
+	t_now = lightrec_ticks();
+	lightrec_dbg.t_cstage[0] += t_now - t_stage;
+	t_stage = t_now;
+	lightrec_dbg.n_comp_ops += block->nb_ops;
+
 	for (i = 0; i < block->nb_ops; i++) {
 		elm = &block->opcode_list[i];
 
@@ -1869,7 +1882,17 @@ static int lightrec_compile_block_(struct lightrec_cstate *cstate,
 	jit_ret();
 	jit_epilog();
 
+	t_now = lightrec_ticks();
+	lightrec_dbg.t_cstage[1] += t_now - t_stage;
+	t_real0 = lightrec_dbg.t_cstage[2];
+	t_stage = t_now;
+
 	new_fn = lightrec_emit_code(state, block, _jit, &block->code_size);
+
+	/* emitting: lightrec_emit_code() less Lightning's optimizer */
+	t_now = lightrec_ticks();
+	lightrec_dbg.t_cstage[3] += t_now - t_stage - (lightrec_dbg.t_cstage[2] - t_real0);
+	t_stage = t_now;
 	if (!new_fn) {
 		if (!ENABLE_THREADED_COMPILER)
 			pr_err("Unable to compile block!\n");
