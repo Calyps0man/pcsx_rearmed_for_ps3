@@ -1,0 +1,141 @@
+From 612a7379d459b568758a084191efc432edf86d79 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 07:22:46 +0000
+Subject: [PATCH 2/2] gpulib: optional front-end hooks for a hardware renderer
+
+A front-end can see every drawing/fill/state command before the
+software renderer runs it, learn about VRAM writes that bypass drawing,
+and take over presenting the display area. All hooks are NULL by
+default, so nothing changes unless a front-end installs them. Used by
+the PS3 front-end to replay drawing on the RSX at higher resolution
+while the software renderer stays authoritative for VRAM.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ plugins/dfxvideo/gpulib_if.c |  8 ++++++++
+ plugins/gpulib/gpu.c         |  5 +++++
+ plugins/gpulib/gpu_hooks.h   | 28 ++++++++++++++++++++++++++++
+ plugins/gpulib/vout_pl.c     |  7 +++++++
+ 4 files changed, 48 insertions(+)
+ create mode 100644 plugins/gpulib/gpu_hooks.h
+
+diff --git a/plugins/dfxvideo/gpulib_if.c b/plugins/dfxvideo/gpulib_if.c
+index b04af7b0..ead4965f 100644
+--- a/plugins/dfxvideo/gpulib_if.c
++++ b/plugins/dfxvideo/gpulib_if.c
+@@ -300,6 +300,7 @@ void renderer_notify_screen_change(const struct psx_gpu_screen *screen)
+ }
+ 
+ #include "../gpulib/gpu_timing.h"
++#include "../gpulib/gpu_hooks.h"
+ extern const unsigned char cmd_lengths[256];
+ 
+ int renderer_do_cmd_list(uint32_t *list, int list_len, uint32_t *ex_regs,
+@@ -327,6 +328,9 @@ int renderer_do_cmd_list(uint32_t *list, int list_len, uint32_t *ex_regs,
+       ex_regs[cmd & 7] = GETLE32(list);
+ #endif
+ 
++    if (gpu_frontend_hooks.cmd && (cmd == 0x02 || (cmd >= 0x20 && cmd < 0x80) || (cmd >= 0xe1 && cmd <= 0xe6)))
++      gpu_frontend_hooks.cmd(list, list_end);
++
+     primTableJ[cmd]((void *)list);
+ 
+     switch(cmd)
+@@ -450,10 +454,14 @@ void renderer_sync_ecmds(uint32_t *ecmds_)
+   cmdDrawAreaEnd((unsigned char *)&ecmds[4]);
+   cmdDrawOffset((unsigned char *)&ecmds[5]);
+   cmdSTP((unsigned char *)&ecmds[6]);
++  if (gpu_frontend_hooks.sync_ecmds)
++    gpu_frontend_hooks.sync_ecmds(ecmds_);
+ }
+ 
+ void renderer_update_caches(int x, int y, int w, int h, int state_changed)
+ {
++  if (gpu_frontend_hooks.vram_written)
++    gpu_frontend_hooks.vram_written(x, y, w, h);
+ }
+ 
+ void renderer_flush_queues(void)
+diff --git a/plugins/gpulib/gpu.c b/plugins/gpulib/gpu.c
+index f04e3a55..a2a30203 100644
+--- a/plugins/gpulib/gpu.c
++++ b/plugins/gpulib/gpu.c
+@@ -13,6 +13,7 @@
+ #include <string.h>
+ 
+ #include "gpu.h"
++#include "gpu_hooks.h"
+ #include "gpu_timing.h"
+ #include "gpu_async.h"
+ #include "../../libpcsxcore/gpu.h" // meh
+@@ -1279,3 +1280,7 @@ void SysPrintf(const char *fmt, ...)
+ #endif
+ 
+ // vim:shiftwidth=2:expandtab
++
++struct gpu_frontend_hooks gpu_frontend_hooks;
++const uint16_t *gpulib_get_vram(void) { return gpu.vram; }
++const uint32_t *gpulib_get_ex_regs(void) { return gpu.ex_regs; }
+diff --git a/plugins/gpulib/gpu_hooks.h b/plugins/gpulib/gpu_hooks.h
+new file mode 100644
+index 00000000..7df38ecf
+--- /dev/null
++++ b/plugins/gpulib/gpu_hooks.h
+@@ -0,0 +1,28 @@
++/* Optional front-end hooks into the GPU plugin, used by the PS3 front-end's
++ * hardware renderer to replay drawing on the RSX. All NULL by default, in
++ * which case nothing changes. */
++#ifndef __GPULIB_GPU_HOOKS_H__
++#define __GPULIB_GPU_HOOKS_H__
++
++#include <stdint.h>
++
++struct gpu_frontend_hooks {
++	/* a GP0 drawing/fill/state command, before the software renderer runs it;
++	 * words are little-endian as in PS1 memory */
++	void (*cmd)(const uint32_t *list, const uint32_t *list_end);
++	/* VRAM area written outside drawing commands (uploads, copies, state load) */
++	void (*vram_written)(int x, int y, int w, int h);
++	/* drawing state registers E1..E6 reloaded (host-endian) */
++	void (*sync_ecmds)(const uint32_t *ex_regs);
++	/* show the display area; return nonzero if the front-end presented it,
++	 * in which case the software frame is not sent */
++	int (*present)(int x, int y, int w, int h, int bgr24);
++};
++
++extern struct gpu_frontend_hooks gpu_frontend_hooks;
++/* native VRAM, 1024x512 little-endian halfwords */
++const uint16_t *gpulib_get_vram(void);
++/* drawing state registers, ex_regs[1..6] = E1..E6 (host-endian) */
++const uint32_t *gpulib_get_ex_regs(void);
++
++#endif
+diff --git a/plugins/gpulib/vout_pl.c b/plugins/gpulib/vout_pl.c
+index 07cf6daa..1328b136 100644
+--- a/plugins/gpulib/vout_pl.c
++++ b/plugins/gpulib/vout_pl.c
+@@ -11,6 +11,7 @@
+ 
+ #include <string.h>
+ #include "gpu.h"
++#include "gpu_hooks.h"
+ #include "../../frontend/plugin_lib.h"
+ 
+ static const struct rearmed_cbs *cbs;
+@@ -104,6 +105,12 @@ int vout_update(struct psx_gpu *gpu, int src_x, int src_y)
+   if (h > 256 && gpu->state.downscale_enable && (src_y & 1))
+     src_y++;
+ 
++  if (gpu_frontend_hooks.present && !gpu->state.enhancement_active && src_y + h <= vram_h
++      && gpu_frontend_hooks.present(src_x + src_x2, src_y, w, h, bpp == 24)) {
++    gpu->state.dims_changed = 0;
++    return 1;
++  }
++
+   offset = (src_y * 1024 + src_x) * 2;
+   offset += src_x2 * bpp / 8;
+ 
+-- 
+2.43.0
+

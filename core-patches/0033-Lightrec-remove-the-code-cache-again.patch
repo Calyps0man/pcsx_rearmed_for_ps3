@@ -1,0 +1,420 @@
+From cbe57ad052161acfd872b52fc13515975bdfa8dd Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 31 Oct 2026 05:32:51 +0000
+Subject: [PATCH] Lightrec: remove the code cache again
+
+It kept a few hundred blocks in every GT2 session and never gave one back:
+Lightrec already reuses blocks whose code comes back unchanged, which is what
+makes the second race start smooth. The Lightning memory changes stay.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ deps/lightrec/blockcache.c       | 145 -------------------------------
+ deps/lightrec/blockcache.h       |   9 --
+ deps/lightrec/lightrec-private.h |   9 --
+ deps/lightrec/lightrec.c         |  64 ++------------
+ deps/lightrec/recompiler.c       |   8 +-
+ 5 files changed, 8 insertions(+), 227 deletions(-)
+
+diff --git a/deps/lightrec/blockcache.c b/deps/lightrec/blockcache.c
+index 46537f20..f1fb149a 100644
+--- a/deps/lightrec/blockcache.c
++++ b/deps/lightrec/blockcache.c
+@@ -17,141 +17,11 @@
+ /* Must be power of two */
+ #define LUT_SIZE 0x4000
+ 
+-/* code cache: blocks retired because their code was overwritten, kept with
+- * their compiled code, oldest first. A game that loads the same code again
+- * (a racing game's race code after the menus) gets the blocks back without
+- * compiling them: a compile costs about 0.3 to 2 ms per block on the PS3. */
+-#define STASH_BUCKETS	1024			/* power of two */
+-#define STASH_MAX	4096			/* blocks */
+-#define STASH_BYTES	(2 * 1024 * 1024)	/* compiled code kept */
+-
+ struct blockcache {
+ 	struct lightrec_state *state;
+ 	struct block * lut[LUT_SIZE];
+-	struct block * stash[STASH_BUCKETS];	/* chained through block->next */
+-	struct block * stash_ring[STASH_MAX];	/* insertion order, NULL = taken */
+-	u32 stash_head, stash_used, stash_count;
+-	size_t stash_bytes;
+ };
+ 
+-static inline u32 stash_bucket(u32 pc)
+-{
+-	return (kunseg(pc) >> 2) & (STASH_BUCKETS - 1);
+-}
+-
+-static void stash_unlink(struct blockcache *cache, struct block *block)
+-{
+-	struct block **p = &cache->stash[stash_bucket(block->pc)];
+-
+-	for (; *p; p = &(*p)->next) {
+-		if (*p == block) {
+-			*p = block->next;
+-			break;
+-		}
+-	}
+-
+-	block->next = NULL;
+-	cache->stash_ring[block->stash_slot] = NULL;
+-	cache->stash_count--;
+-	cache->stash_bytes -= block->code_size;
+-}
+-
+-/* drops the oldest kept block (a slot left empty by a taken one is skipped) */
+-static bool stash_drop_oldest(struct blockcache *cache)
+-{
+-	struct block *block;
+-
+-	while (cache->stash_used) {
+-		block = cache->stash_ring[cache->stash_head];
+-		cache->stash_ring[cache->stash_head] = NULL;
+-		cache->stash_head = (cache->stash_head + 1) % STASH_MAX;
+-		cache->stash_used--;
+-
+-		if (block) {
+-			stash_unlink(cache, block);
+-			lightrec_free_block(cache->state, block);
+-			lightrec_dbg.n_stash_drop++;
+-			return true;
+-		}
+-	}
+-
+-	return false;
+-}
+-
+-/* (called on the emulation thread, with the block out of the cache and out of
+-   the compile queue) */
+-void lightrec_stash_block(struct blockcache *cache, struct block *block)
+-{
+-	u32 slot;
+-
+-	if (!block->function || !block->code_copy ||
+-	    block_has_flag(block, BLOCK_SHOULD_RECOMPILE | BLOCK_NEVER_COMPILE) ||
+-	    block->code_size > STASH_BYTES / 4) {
+-		lightrec_free_block(cache->state, block);
+-		return;
+-	}
+-
+-	while (cache->stash_used == STASH_MAX ||
+-	       (cache->stash_count &&
+-		cache->stash_bytes + block->code_size > STASH_BYTES)) {
+-		if (!stash_drop_oldest(cache))
+-			break;
+-	}
+-
+-	slot = (cache->stash_head + cache->stash_used) % STASH_MAX;
+-	cache->stash_ring[slot] = block;
+-	cache->stash_used++;
+-	block->stash_slot = slot;
+-
+-	block->next = cache->stash[stash_bucket(block->pc)];
+-	cache->stash[stash_bucket(block->pc)] = block;
+-	cache->stash_count++;
+-	cache->stash_bytes += block->code_size;
+-	lightrec_dbg.n_stash_add++;
+-}
+-
+-/* a kept block for this address whose code is exactly what is there now */
+-struct block * lightrec_stash_take(struct blockcache *cache, u32 pc,
+-				   const u32 *code)
+-{
+-	struct block *block;
+-
+-	for (block = cache->stash[stash_bucket(pc)]; block; block = block->next) {
+-		if (kunseg(block->pc) != kunseg(pc) || block->pc != pc)
+-			continue;
+-		if (memcmp(block->code_copy, code,
+-			   block->code_copy_len * sizeof(u32)))
+-			continue;
+-
+-		stash_unlink(cache, block);
+-		lightrec_dbg.n_stash_hit++;
+-		return block;
+-	}
+-
+-	return NULL;
+-}
+-
+-bool lightrec_stash_clear(struct blockcache *cache)
+-{
+-	unsigned int i;
+-	struct block *block, *next;
+-	bool any = cache->stash_count != 0;
+-
+-	for (i = 0; i < STASH_BUCKETS; i++) {
+-		for (block = cache->stash[i]; block; block = next) {
+-			next = block->next;
+-			lightrec_free_block(cache->state, block);
+-		}
+-		cache->stash[i] = NULL;
+-	}
+-
+-	memset(cache->stash_ring, 0, sizeof(cache->stash_ring));
+-	cache->stash_head = cache->stash_used = cache->stash_count = 0;
+-	cache->stash_bytes = 0;
+-
+-	return any;
+-}
+-
+ u16 lightrec_get_lut_entry(const struct block *block)
+ {
+ 	return (kunseg(block->pc) >> 2) & (LUT_SIZE - 1);
+@@ -214,19 +84,6 @@ void lightrec_register_block(struct blockcache *cache, struct block *block)
+ 	remove_from_code_lut(cache, block);
+ }
+ 
+-/* (a block taken back from the code cache: its compiled code exists, and
+-   entries of other blocks inside its range stay) */
+-void lightrec_register_block_keep_lut(struct blockcache *cache,
+-				      struct block *block)
+-{
+-	u32 pc = kunseg(block->pc);
+-	struct block *old;
+-
+-	old = cache->lut[(pc >> 2) & (LUT_SIZE - 1)];
+-	block->next = old;
+-	cache->lut[(pc >> 2) & (LUT_SIZE - 1)] = block;
+-}
+-
+ void lightrec_unregister_block(struct blockcache *cache, struct block *block)
+ {
+ 	u32 pc = kunseg(block->pc);
+@@ -305,7 +162,6 @@ void lightrec_remove_outdated_blocks(struct blockcache *cache,
+ void lightrec_free_all_blocks_except(struct blockcache *cache,
+ 				     const struct block *except)
+ {
+-	lightrec_stash_clear(cache);
+ 	lightrec_free_blocks(cache, except, true);
+ }
+ 
+@@ -316,7 +172,6 @@ void lightrec_free_all_blocks(struct blockcache *cache)
+ 
+ void lightrec_free_block_cache(struct blockcache *cache)
+ {
+-	lightrec_stash_clear(cache);
+ 	lightrec_free_all_blocks(cache);
+ 	lightrec_free(cache->state, MEM_FOR_LIGHTREC, sizeof(*cache), cache);
+ }
+diff --git a/deps/lightrec/blockcache.h b/deps/lightrec/blockcache.h
+index 927af710..17514a11 100644
+--- a/deps/lightrec/blockcache.h
++++ b/deps/lightrec/blockcache.h
+@@ -7,7 +7,6 @@
+ #define __BLOCKCACHE_H__
+ 
+ #include "lightrec.h"
+-#include <stdbool.h>
+ 
+ struct blockcache;
+ 
+@@ -23,14 +22,6 @@ struct blockcache * lightrec_blockcache_init(struct lightrec_state *state);
+ void lightrec_free_block_cache(struct blockcache *cache);
+ 
+ void lightrec_free_all_blocks(struct blockcache *cache);
+-
+-/* code cache (see struct block) */
+-void lightrec_stash_block(struct blockcache *cache, struct block *block);
+-struct block * lightrec_stash_take(struct blockcache *cache, u32 pc,
+-				   const u32 *code);
+-bool lightrec_stash_clear(struct blockcache *cache);
+-void lightrec_register_block_keep_lut(struct blockcache *cache,
+-				      struct block *block);
+ void lightrec_free_all_blocks_except(struct blockcache *cache,
+ 				     const struct block *except);
+ 
+diff --git a/deps/lightrec/lightrec-private.h b/deps/lightrec/lightrec-private.h
+index ab6af7fc..3904ef66 100644
+--- a/deps/lightrec/lightrec-private.h
++++ b/deps/lightrec/lightrec-private.h
+@@ -124,13 +124,6 @@ struct block {
+ 	u32 hash;
+ 	u32 precompile_date;
+ 	unsigned int code_size;
+-	/* the MIPS code as it was when the block was made, and its length in
+-	   words: a block retired because its code was overwritten is kept with
+-	   its compiled code (blockcache.c) and taken back if exactly this code
+-	   returns at its address */
+-	u32 *code_copy;
+-	u32 code_copy_len;
+-	u32 stash_slot;
+ 	u16 nb_ops;
+ #if LIGHTREC_THREADED_BUILT
+ 	/* requests for the block while it waits in the compile queue, counted
+@@ -244,8 +237,6 @@ struct lightrec_dbg {
+ 	   reaper, cleanup); instructions compiled */
+ 	volatile u64 t_cstage[5];
+ 	volatile u32 n_comp_ops;
+-	/* code cache: blocks kept, taken back (no compile), dropped */
+-	volatile u32 n_stash_add, n_stash_hit, n_stash_drop;
+ };
+ static inline u64 lightrec_ticks(void)
+ {
+diff --git a/deps/lightrec/lightrec.c b/deps/lightrec/lightrec.c
+index a80d5612..1eede290 100644
+--- a/deps/lightrec/lightrec.c
++++ b/deps/lightrec/lightrec.c
+@@ -39,9 +39,6 @@ static void lightrec_mtc2(struct lightrec_state *state, u8 reg, u32 data);
+ static u32 lightrec_mfc2(struct lightrec_state *state, u8 reg);
+ 
+ static void lightrec_reap_block(struct lightrec_state *state, void *data);
+-static void lightrec_retire_block(struct lightrec_state *state, void *data);
+-static void lightrec_relink(struct lightrec_state *state, struct block *block,
+-			    u32 pc, void *func);
+ 
+ static void lightrec_default_sb(struct lightrec_state *state, u32 opcode,
+ 				void *host, u32 addr, u32 data)
+@@ -143,9 +140,6 @@ void lightrec_debug_counts(u32 *c, u64 *t)
+ 	c[7] = lightrec_dbg.n_relink_stale;
+ 	c[8] = lightrec_dbg.n_loop;
+ 	c[9] = lightrec_dbg.n_comp_ops;
+-	c[10] = lightrec_dbg.n_stash_add;
+-	c[11] = lightrec_dbg.n_stash_hit;
+-	c[12] = lightrec_dbg.n_stash_drop;
+ 	t[8] = lightrec_dbg.t_cstage[0];
+ 	t[9] = lightrec_dbg.t_cstage[1];
+ 	t[10] = lightrec_dbg.t_cstage[2];
+@@ -799,38 +793,18 @@ static struct block * lightrec_get_block_(struct lightrec_state *state, u32 pc)
+ 
+ 			remove_from_code_lut(state->block_cache, block);
+ 
+-			/* kept with its compiled code, in case this code comes
+-			 * back (lightrec_stash_block()) */
+ 			if (ENABLE_THREADED_COMPILER) {
+ 				lightrec_reaper_add(state->reaper,
+-						    lightrec_retire_block, block);
++						    lightrec_reap_block, block);
+ 			} else {
+ 				lightrec_unregister_block(state->block_cache, block);
+-				lightrec_stash_block(state->block_cache, block);
++				lightrec_free_block(state, block);
+ 			}
+ 		}
+ 
+ 		block = NULL;
+ 	}
+ 
+-	if (!block) {
+-		void *host;
+-
+-		/* the same code was compiled before: take that block back */
+-		if (lightrec_get_map(state, &host, kunseg(pc))) {
+-			block = lightrec_stash_take(state->block_cache, pc, host);
+-			if (block) {
+-				block_clear_flags(block, BLOCK_IS_DEAD);
+-				lightrec_register_block_keep_lut(state->block_cache, block);
+-				if (ENABLE_THREADED_COMPILER)
+-					lightrec_relink(state, block, pc, block->function);
+-				else
+-					lut_write(state, lut_offset(pc), block->function);
+-				return block;
+-			}
+-		}
+-	}
+-
+ 	if (!block) {
+ 		{
+ 			LR_DBG_ENTER(LR_PRECOMPILE, pc, 0);
+@@ -1072,17 +1046,12 @@ static void * lightrec_emit_code(struct lightrec_state *state,
+ 				return NULL;
+ 			}
+ 
+-			/* Drop the code cache's blocks first, then remove
+-			 * outdated blocks, and try again */
+-			if (lightrec_stash_clear(state->block_cache))
+-				code = lightrec_alloc_code(state, (size_t) code_size);
+-			if (!code) {
+-				lightrec_remove_outdated_blocks(state->block_cache, block);
++			/* Remove outdated blocks, and try again */
++			lightrec_remove_outdated_blocks(state->block_cache, block);
+ 
+-				pr_debug("Re-try to alloc %zu bytes...\n", code_size);
++			pr_debug("Re-try to alloc %zu bytes...\n", code_size);
+ 
+-				code = lightrec_alloc_code(state, code_size);
+-			}
++			code = lightrec_alloc_code(state, code_size);
+ 			if (!code) {
+ 				/* The code buffer is full of blocks that are
+ 				 * still valid (lightrec_block_is_old() rarely
+@@ -1189,8 +1158,6 @@ static struct block * generate_wrapper(struct lightrec_state *state)
+ 
+ 	block->_jit = _jit;
+ 	block->opcode_list = NULL;
+-	block->code_copy = NULL;
+-	block->code_copy_len = 0;
+ 	block->flags = BLOCK_NO_OPCODE_LIST;
+ 	block->nb_ops = 0;
+ 
+@@ -1515,8 +1482,6 @@ static struct block * generate_dispatcher(struct lightrec_state *state)
+ 
+ 	block->_jit = _jit;
+ 	block->opcode_list = NULL;
+-	block->code_copy = NULL;
+-	block->code_copy_len = 0;
+ 	block->flags = BLOCK_NO_OPCODE_LIST;
+ 	block->nb_ops = 0;
+ 
+@@ -1658,11 +1623,6 @@ static struct block * lightrec_precompile_block(struct lightrec_state *state,
+ 	block->code = code;
+ 	block->next = NULL;
+ 	block->flags = 0;
+-	block->stash_slot = 0;
+-	block->code_copy = lightrec_malloc(state, MEM_FOR_MIPS_CODE, length);
+-	if (block->code_copy)
+-		memcpy(block->code_copy, code, length);
+-	block->code_copy_len = block->code_copy ? length / sizeof(u32) : 0;
+ #if LIGHTREC_THREADED_BUILT
+ 	block->queue_requests = 0;
+ #endif
+@@ -1755,15 +1715,6 @@ static void lightrec_reap_block(struct lightrec_state *state, void *data)
+ 	lightrec_free_block(state, block);
+ }
+ 
+-/* (reaper: a block whose code was overwritten, see lightrec_get_block_()) */
+-static void lightrec_retire_block(struct lightrec_state *state, void *data)
+-{
+-	struct block *block = data;
+-
+-	lightrec_unregister_block(state->block_cache, block);
+-	lightrec_stash_block(state->block_cache, block);
+-}
+-
+ static void lightrec_reap_jit(struct lightrec_state *state, void *data)
+ {
+ 	_jit_destroy_state(data);
+@@ -2179,9 +2130,6 @@ void lightrec_free_block(struct lightrec_state *state, struct block *block)
+ 		lightrec_free_function(state, block->function);
+ 		lightrec_unregister(MEM_FOR_CODE, block->code_size);
+ 	}
+-	if (block->code_copy)
+-		lightrec_free(state, MEM_FOR_MIPS_CODE,
+-			      block->code_copy_len * sizeof(u32), block->code_copy);
+ 	lightrec_free(state, MEM_FOR_IR, sizeof(*block), block);
+ }
+ 
+diff --git a/deps/lightrec/recompiler.c b/deps/lightrec/recompiler.c
+index 5c40df1a..e5108069 100644
+--- a/deps/lightrec/recompiler.c
++++ b/deps/lightrec/recompiler.c
+@@ -141,12 +141,8 @@ static void lightrec_flush_code_buffer(struct lightrec_state *state, void *d)
+ 	 * (lightrec_remove_outdated_blocks() alone rarely frees anything: its age
+ 	 * test compares against a cycle counter reset at every exit, so the buffer
+ 	 * stayed full and new blocks were only ever interpreted). */
+-	/* the code cache's blocks go first: dropping them may make enough room
+-	   (the compile is asked for again when the block is met again) */
+-	if (!lightrec_stash_clear(state->block_cache)) {
+-		lightrec_free_all_blocks_except(state->block_cache, NULL);
+-		lightrec_code_flushes++;
+-	}
++	lightrec_free_all_blocks_except(state->block_cache, NULL);
++	lightrec_code_flushes++;
+ 	rec->must_flush = false;
+ }
+ 
+-- 
+2.43.0
+

@@ -1,0 +1,86 @@
+From 9e96c118bdfb41f89c4f344d91433f893954b458 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 31 Oct 2026 12:11:43 +0000
+Subject: [PATCH] CD-ROM: note when the disc's main executable is first read
+
+CheckCdrom() keeps the executable's first sector; ReadTrack() sets
+CdromExeRead when the emulated drive reads it. A front end can tell from it
+that a BIOS boot (with the logo) has reached the game.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ libpcsxcore/cdrom.c |  6 ++++--
+ libpcsxcore/misc.c  | 10 ++++++++++
+ libpcsxcore/misc.h  |  2 ++
+ 3 files changed, 16 insertions(+), 2 deletions(-)
+
+diff --git a/libpcsxcore/cdrom.c b/libpcsxcore/cdrom.c
+index 81a5188e..d0decc4b 100644
+--- a/libpcsxcore/cdrom.c
++++ b/libpcsxcore/cdrom.c
+@@ -418,9 +418,11 @@ static int ReadTrack(const u8 *time)
+ 		return 1;
+ 
+ 	ret = cdra_readTrack(time);
+-	if (ret == 0)
++	if (ret == 0) {
+ 		memcpy(cdr.Prev, time, 3);
+-	else
++		if (!CdromExeRead && !memcmp(time, CdromExeTime, 3))
++			CdromExeRead = 1;
++	} else
+ 		log_unhandled("ReadTrack %02d:%02d:%02d ret %d\n",
+ 			time[0], time[1], time[2], ret);
+ 	return ret == 0;
+diff --git a/libpcsxcore/misc.c b/libpcsxcore/misc.c
+index fbeaa03b..dd1ccbe8 100644
+--- a/libpcsxcore/misc.c
++++ b/libpcsxcore/misc.c
+@@ -530,6 +530,9 @@ int LoadCdromFile(const char *filename, int full, EXE_HEADER *head, u8 *time_bcd
+ 	return 0;
+ }
+ 
++u8 CdromExeTime[3];
++int CdromExeRead;
++
+ int CheckCdrom() {
+ 	struct iso_directory_record *dir;
+ 	struct CdrStat stat = { 0, 0, };
+@@ -549,6 +552,8 @@ int CheckCdrom() {
+ 	FreePPFCache();
+ 	memset(CdromLabel, 0, sizeof(CdromLabel));
+ 	memset(CdromId, 0, sizeof(CdromId));
++	memset(CdromExeTime, 0, sizeof(CdromExeTime));
++	CdromExeRead = 0;
+ 	memset(exename, 0, sizeof(exename));
+ 	Config.PsxRegion = PSX_REGION_US;
+ 
+@@ -624,6 +629,11 @@ int CheckCdrom() {
+ 	} else
+ 		return -1;		// SYSTEM.CNF and PSX.EXE not found
+ 
++	/* where the main executable starts: its first read tells that the BIOS
++	   (booting with its logo) is done and the game is being loaded */
++	memcpy(CdromExeTime, time, 3);
++	CdromExeRead = 0;
++
+ 	if (CdromId[0] == '\0') {
+ 		len = strlen(exename);
+ 		c = 0;
+diff --git a/libpcsxcore/misc.h b/libpcsxcore/misc.h
+index c88abf7f..421b331f 100644
+--- a/libpcsxcore/misc.h
++++ b/libpcsxcore/misc.h
+@@ -62,6 +62,8 @@ int BiosBootBypass();
+ int LoadCdromMainExe(const char *exe_save_path);
+ int LoadCdromFile(const char *filename, int full, EXE_HEADER *head, u8 *time_bcd_out);
+ int CheckCdrom();
++extern u8 CdromExeTime[3];   /* first sector (binary MSF) of the disc's main executable */
++extern int CdromExeRead;     /* set when that sector was read (see cdrom.c) */
+ int CheckResetManualExe();
+ int Load(const char *ExePath);
+ 
+-- 
+2.43.0
+

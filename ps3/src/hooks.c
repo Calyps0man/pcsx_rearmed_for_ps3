@@ -1,0 +1,50 @@
+/* Front-end glue that needs to know about the core or the GPU renderer. */
+#include <stdio.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <dirent.h>
+#include "common.h"
+#include "core_hooks.h"
+
+extern char CdromId[10];        /* libpcsxcore/misc.c: serial of the running disc */
+
+const char *hooks_game_serial(void) { return CdromId; }
+
+/* a BIOS the core will use: one of the names it tries first, else any file of
+   512 KiB in system/ (the core takes those too, of any name) */
+const char *hooks_bios_status(void)
+{
+    static char b[200];
+    static const char *names[] = { "scph5500", "scph5501", "scph5502", "psxonpsp660", "scph101", "scph7001", "scph1001", NULL };
+    int i;
+    DIR *d;
+    struct dirent *e;
+    for (i = 0; names[i]; i++) {
+        char p[256];
+        struct stat st;
+        snprintf(p, sizeof p, APP_DIR "/system/%s.bin", names[i]);
+        if (stat(p, &st) == 0 && st.st_size == 512 * 1024) {
+            snprintf(b, sizeof b, "%s.bin found", names[i]);
+            return b;
+        }
+    }
+    if ((d = opendir(APP_DIR "/system"))) {
+        while ((e = readdir(d))) {
+            char p[512];
+            struct stat st;
+            if (e->d_name[0] == '.') continue;
+            snprintf(p, sizeof p, APP_DIR "/system/%s", e->d_name);
+            if (stat(p, &st) == 0 && S_ISREG(st.st_mode) && st.st_size == 512 * 1024) {
+                snprintf(b, sizeof b, "%.150s found", e->d_name);
+                closedir(d);
+                return b;
+            }
+        }
+        closedir(d);
+    }
+    return "none found, using the built-in HLE BIOS (put scph5501.bin in system/)";
+}
+
+int hooks_bios_present(void) { return strncmp(hooks_bios_status(), "none", 4) != 0; }
+
+/* GPU renderer hooks: hwr/hwr_rsx.c */

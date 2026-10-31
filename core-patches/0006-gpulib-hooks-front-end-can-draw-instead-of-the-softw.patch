@@ -1,0 +1,99 @@
+From a65d525548148720611dc4092c249a39a552cba6 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 10:50:57 +0000
+Subject: [PATCH 6/7] gpulib hooks: front-end can draw instead of the software
+ renderer
+
+- cmd hook returns nonzero for a drawing/fill command it drew: the
+  software renderer skips it (length/cycle bookkeeping still runs)
+- vram_read hook before the core reads VRAM (GPU->CPU transfer, copy
+  source, savestate)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ plugins/dfxvideo/gpulib_if.c |  9 +++++----
+ plugins/gpulib/gpu.c         |  9 ++++++++-
+ plugins/gpulib/gpu_hooks.h   | 10 ++++++++--
+ 3 files changed, 21 insertions(+), 7 deletions(-)
+
+diff --git a/plugins/dfxvideo/gpulib_if.c b/plugins/dfxvideo/gpulib_if.c
+index ead4965f..b06c05ed 100644
+--- a/plugins/dfxvideo/gpulib_if.c
++++ b/plugins/dfxvideo/gpulib_if.c
+@@ -328,10 +328,11 @@ int renderer_do_cmd_list(uint32_t *list, int list_len, uint32_t *ex_regs,
+       ex_regs[cmd & 7] = GETLE32(list);
+ #endif
+ 
+-    if (gpu_frontend_hooks.cmd && (cmd == 0x02 || (cmd >= 0x20 && cmd < 0x80) || (cmd >= 0xe1 && cmd <= 0xe6)))
+-      gpu_frontend_hooks.cmd(list, list_end);
+-
+-    primTableJ[cmd]((void *)list);
++    /* the length and cycle bookkeeping below still runs for commands the
++       front-end drew itself; only the software drawing is skipped */
++    if (!(gpu_frontend_hooks.cmd && (cmd == 0x02 || (cmd >= 0x20 && cmd < 0x80) || (cmd >= 0xe1 && cmd <= 0xe6))
++          && gpu_frontend_hooks.cmd(list, list_end) && cmd < 0x80))
++      primTableJ[cmd]((void *)list);
+ 
+     switch(cmd)
+     {
+diff --git a/plugins/gpulib/gpu.c b/plugins/gpulib/gpu.c
+index 9002559b..66e65b28 100644
+--- a/plugins/gpulib/gpu.c
++++ b/plugins/gpulib/gpu.c
+@@ -588,7 +588,10 @@ static noinline void start_vram_transfer(struct psx_gpu *gpu, uint32_t pos_word,
+   //sync_renderer(gpu);
+ 
+   if (is_read) {
+-    const uint16_t *mem = VRAM_MEM_XY(gpu->vram, gpu->dma.x, gpu->dma.y);
++    const uint16_t *mem;
++    if (gpu_frontend_hooks.vram_read)
++      gpu_frontend_hooks.vram_read(gpu->dma.x, gpu->dma.y, gpu->dma.w, gpu->dma.h);
++    mem = VRAM_MEM_XY(gpu->vram, gpu->dma.x, gpu->dma.y);
+     gpu->status |= PSX_GPU_STATUS_IMG;
+     // XXX: wrong for width 1
+     gpu->gp0 = LE16TOH(mem[0]) | ((uint32_t)LE16TOH(mem[1]) << 16);
+@@ -658,6 +661,8 @@ int do_vram_copy(uint16_t *vram, const uint32_t *ex_regs, const uint32_t *params
+   uint32_t x, y;
+ 
+   renderer_flush_queues();
++  if (gpu_frontend_hooks.vram_read)
++    gpu_frontend_hooks.vram_read(sx, sy, w, h);
+ 
+   if (unlikely((sx < dx && dx < sx + w) || sx + w > 1024 || dx + w > 1024 || msb))
+   {
+@@ -1122,6 +1127,8 @@ long GPUfreeze(uint32_t type, GPUFreeze_t *freeze, uint16_t **vram_ptr)
+       }
+ 
+       sync_renderer(&gpu);
++      if (gpu_frontend_hooks.vram_read)
++        gpu_frontend_hooks.vram_read(0, 0, 1024, 512);
+       memcpy(freeze->ulControl, gpu.regs, sizeof(gpu.regs));
+       memcpy(freeze->ulControl + 0xe0, gpu.ex_regs, sizeof(gpu.ex_regs));
+       freeze->ulStatus = gpu.status;
+diff --git a/plugins/gpulib/gpu_hooks.h b/plugins/gpulib/gpu_hooks.h
+index 8325d36a..48e87678 100644
+--- a/plugins/gpulib/gpu_hooks.h
++++ b/plugins/gpulib/gpu_hooks.h
+@@ -8,10 +8,16 @@
+ 
+ struct gpu_frontend_hooks {
+ 	/* a GP0 drawing/fill/state command, before the software renderer runs it;
+-	 * words are little-endian as in PS1 memory */
+-	void (*cmd)(const uint32_t *list, const uint32_t *list_end);
++	 * words are little-endian as in PS1 memory. Returning nonzero for a drawing
++	 * or fill command (0x02, 0x20..0x7f) means the front-end drew it and the
++	 * software renderer skips it (the front-end then owns VRAM contents: see
++	 * vram_read) */
++	int (*cmd)(const uint32_t *list, const uint32_t *list_end);
+ 	/* VRAM area written outside drawing commands (uploads, copies, state load) */
+ 	void (*vram_written)(int x, int y, int w, int h);
++	/* VRAM area about to be read from the core's VRAM (GPU->CPU transfer, copy
++	 * source, savestate): a front-end that draws itself must bring it up to date */
++	void (*vram_read)(int x, int y, int w, int h);
+ 	/* drawing state registers E1..E6 reloaded (host-endian) */
+ 	void (*sync_ecmds)(const uint32_t *ex_regs);
+ 	/* show the display area; return nonzero if the front-end presented it,
+-- 
+2.43.0
+

@@ -1,0 +1,123 @@
+From 2b51d163db10b93ea7c7c82c6828d496f09961e9 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 29 Oct 2026 21:27:35 +0000
+Subject: [PATCH] lightrec: accesses to unmapped memory no longer stop the
+ emulation
+
+lightrec_rw() treated a load/store to an address with no memory map as a
+segfault: it set LIGHTREC_EXIT_SEGFAULT and the plugin called exit(1),
+which on the PS3 left the app frozen. Terracon reads through a stale
+pointer (0x00e00000) in the block after 8006a2e0 once a level is loaded;
+the interpreter just reads all ones there. Lightrec now does the same:
+loads return all ones, stores are dropped, the access is tagged as I/O
+and counted (the debug state line shows the count and the last one).
+The plugin also logs through SysPrintf if it still has to exit.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ deps/lightrec/lightrec.c      | 44 ++++++++++++++++++++++++++---------
+ libpcsxcore/lightrec/plugin.c |  3 +++
+ libpcsxcore/misc.c            | 10 +++++---
+ 3 files changed, 43 insertions(+), 14 deletions(-)
+
+diff --git a/deps/lightrec/lightrec.c b/deps/lightrec/lightrec.c
+index c034b48a..430ae5d9 100644
+--- a/deps/lightrec/lightrec.c
++++ b/deps/lightrec/lightrec.c
+@@ -117,15 +117,8 @@ static const struct lightrec_mem_map_ops lightrec_default_ops = {
+ 	.swu = lightrec_default_swu,
+ };
+ 
+-static void __segfault_cb(struct lightrec_state *state, u32 addr,
+-			  const struct block *block)
+-{
+-	lightrec_set_exit_flags(state, LIGHTREC_EXIT_SEGFAULT);
+-	pr_err("Segmentation fault in recompiled code: invalid "
+-	       "load/store at address "PC_FMT"\n", addr);
+-	if (block)
+-		pr_err("Was executing block "PC_FMT"\n", block->pc);
+-}
++unsigned int lightrec_bad_accesses;
++u32 lightrec_bad_access_addr, lightrec_bad_access_pc;
+ 
+ static void lightrec_swl(struct lightrec_state *state,
+ 			 const struct lightrec_mem_map_ops *ops,
+@@ -280,8 +273,37 @@ u32 lightrec_rw(struct lightrec_state *state, union code op, u32 base,
+ 
+ 	map = lightrec_get_map(state, &host, addr);
+ 	if (!map) {
+-		__segfault_cb(state, addr, block);
+-		return 0;
++		/* Nothing is mapped there. Do what the interpreter does (the
++		 * PS1 itself would raise a bus error that games never expect):
++		 * loads read all ones, stores are dropped, and the emulation
++		 * goes on. Stopping here (LIGHTREC_EXIT_SEGFAULT) made the
++		 * front end exit(), which froze the PS3 (Terracon reads
++		 * through a stale pointer after loading a level). */
++		lightrec_bad_accesses++;
++		lightrec_bad_access_addr = addr;
++		lightrec_bad_access_pc = block ? block->pc : state->curr_pc;
++		if (flags && !LIGHTREC_FLAGS_GET_IO_MODE(*flags))
++			*flags |= LIGHTREC_IO_MODE(LIGHTREC_IO_HW);
++
++		switch (op.i.op) {
++		case OP_LB:
++		case OP_LH:
++		case OP_LW:
++		case OP_META_LWU:
++			return 0xffffffff;
++		case OP_LBU:
++			return 0xff;
++		case OP_LHU:
++			return 0xffff;
++		case OP_LWL:
++		case OP_LWR:
++			return 0xffffffff;
++		case OP_LWC2:
++			lightrec_mtc2(state, op.i.rt, 0xffffffff);
++			return 0;
++		default:
++			return 0;
++		}
+ 	}
+ 
+ 	if (flags)
+diff --git a/libpcsxcore/lightrec/plugin.c b/libpcsxcore/lightrec/plugin.c
+index c16b6025..546384f6 100644
+--- a/libpcsxcore/lightrec/plugin.c
++++ b/libpcsxcore/lightrec/plugin.c
+@@ -597,6 +597,9 @@ static void lightrec_plugin_execute_internal(bool block_only)
+ 		if (flags & LIGHTREC_EXIT_SEGFAULT) {
+ 			fprintf(stderr, "Exiting at cycle 0x%08x\n",
+ 				psxRegs.cycle);
++			/* stderr goes nowhere on some hosts (PS3): say it in the log too */
++			SysPrintf("lightrec: cannot go on at pc %08x (cycle %08x), exiting\n",
++				  psxRegs.pc, psxRegs.cycle);
+ 			if (lightrec_debug)
+ 				print_for_big_ass_debugger();
+ 			exit(1);
+diff --git a/libpcsxcore/misc.c b/libpcsxcore/misc.c
+index 2a154ded..cb3b99a7 100644
+--- a/libpcsxcore/misc.c
++++ b/libpcsxcore/misc.c
+@@ -141,9 +141,13 @@ void psx_debug_state(char *b, int n)
+ 	if (psxCpu != &psxInt && psx_debug_trace && k > 0 && k < n) {
+ 		u32 tpc, tcount;
+ 		lightrec_plugin_debug_trace(&tpc, &tcount);
+-		extern unsigned int lightrec_code_flushes;
+-		snprintf(b + k, n - k, "; dynarec: last block %08x, %u block entries, code buffer full %u times",
+-			 tpc, tcount, lightrec_code_flushes);
++		extern unsigned int lightrec_code_flushes, lightrec_bad_accesses;
++		extern u32 lightrec_bad_access_addr, lightrec_bad_access_pc;
++		k += snprintf(b + k, n - k, "; dynarec: last block %08x, %u block entries, code buffer full %u times",
++			      tpc, tcount, lightrec_code_flushes);
++		if (k > 0 && k < n)
++			snprintf(b + k, n - k, ", accesses to unmapped memory %u (last %08x in block %08x)",
++				 lightrec_bad_accesses, lightrec_bad_access_addr, lightrec_bad_access_pc);
+ 	}
+ #endif
+ }
+-- 
+2.43.0
+

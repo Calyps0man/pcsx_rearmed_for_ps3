@@ -1,0 +1,86 @@
+From 4057a4374d814c9da5f723214aebdbc664202822 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 31 Oct 2026 10:52:57 +0000
+Subject: [PATCH] Lightrec threaded: no spin on a block waiting to be
+ recompiled; BIOS read per game
+
+- get_next_block_func_(): a block flagged for recompilation that has no code
+  yet is interpreted instead of waited for. With the code buffer full the
+  compiler waits for the reaper, which only runs after lightrec_execute()
+  returns, so the emulation thread spun forever (Medal of Honor froze with
+  2 threads).
+- lightrec_emit_code(): when the threaded compiler gives up on a full
+  buffer, mark the code area as user-provided, so destroying the Lightning
+  state does not munmap(NULL) (hosts with mmap and the PS1 RAM at 0).
+- retro_load_game(): read the BIOS files and the boot logo option again, so
+  a front end that loads several games in one session sees the current ones.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ deps/lightrec/lightrec.c | 18 ++++++++++++++++--
+ frontend/libretro.c      |  5 +++++
+ 2 files changed, 21 insertions(+), 2 deletions(-)
+
+diff --git a/deps/lightrec/lightrec.c b/deps/lightrec/lightrec.c
+index 1eede290..1f678993 100644
+--- a/deps/lightrec/lightrec.c
++++ b/deps/lightrec/lightrec.c
+@@ -907,7 +907,14 @@ static void * get_next_block_func_(struct lightrec_state *state, u32 pc)
+ 			}
+ 		}
+ 
+-		if (ENABLE_THREADED_COMPILER && likely(!should_recompile))
++		/* A block to compile again that has no code yet (an opcode got
++		 * tagged while the interpreter ran it) is interpreted too:
++		 * waiting here for the compiler thread spun forever when the
++		 * code buffer was full, as the compiler then waits for the
++		 * reaper to flush it, and the reaper only runs once
++		 * lightrec_execute() returns, which needs the cycles to move. */
++		if (ENABLE_THREADED_COMPILER &&
++		    (likely(!should_recompile) || !block->function))
+ 			func = lightrec_recompiler_run_first_pass(state, block, &pc);
+ 		else
+ 			func = block->function;
+@@ -1042,7 +1049,14 @@ static void * lightrec_emit_code(struct lightrec_state *state,
+ 				/* If we're using the threaded compiler, return
+ 				 * an allocation error here. The threaded
+ 				 * compiler will then empty its job queue and
+-				 * request a code flush using the reaper. */
++				 * request a code flush using the reaper.
++				 * No code was given to Lightning: mark the
++				 * (empty) code area as ours, or destroying
++				 * the state would munmap(NULL) on systems
++				 * with mmap, unmapping whatever is mapped
++				 * at address 0 (the PS1 RAM, with the
++				 * custom memory map). */
++				jit_set_code(NULL, 0);
+ 				return NULL;
+ 			}
+ 
+diff --git a/frontend/libretro.c b/frontend/libretro.c
+index 9dd3502c..7da00f1d 100644
+--- a/frontend/libretro.c
++++ b/frontend/libretro.c
+@@ -1949,6 +1949,8 @@ static void show_enabled_hacks(void)
+    }
+ }
+ 
++static void loadPSXBios(void);
++
+ bool retro_load_game(const struct retro_game_info *info)
+ {
+    size_t i;
+@@ -2016,6 +2018,9 @@ bool retro_load_game(const struct retro_game_info *info)
+    is_exe = (strcasestr(info->path, ".exe") != NULL);
+ 
+    update_variables(false);
++   /* a front end that loads several games in one session: the BIOS files and the
++      boot logo option as they are now (both were read only in retro_init) */
++   loadPSXBios();
+ 
+    if (plugins_opened)
+    {
+-- 
+2.43.0
+

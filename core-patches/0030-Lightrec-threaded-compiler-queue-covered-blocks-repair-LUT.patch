@@ -1,0 +1,160 @@
+From 9c702069c5e917815ac343536aa27f6c066e1375 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 23:10:51 +0000
+Subject: [PATCH] Lightrec threaded compiler: queue covered blocks, repair code
+ LUT entries
+
+- A block to compile that lies inside a queued block was not queued: each
+  visit asked again (queue lock and walk) while the other one waited, which
+  is hundreds of milliseconds while a game loads code (58644 such requests
+  for 22 compiles in a test program; about 20000 per frame in GT2 on the
+  PS3). It is queued now.
+- When the dispatcher found a compiled block through an empty or stale code
+  LUT entry it did not write the entry, so each visit came back to it. The
+  entry is written now, re-checked after a full barrier against the compiler
+  thread killing or replacing the block (which has one before its writes).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ deps/lightrec/lightrec-private.h |  2 ++
+ deps/lightrec/lightrec.c         | 55 +++++++++++++++++++++++++++++++-
+ deps/lightrec/recompiler.c       | 13 +++++---
+ 3 files changed, 65 insertions(+), 5 deletions(-)
+
+diff --git a/deps/lightrec/lightrec-private.h b/deps/lightrec/lightrec-private.h
+index 6975327a..bac257b9 100644
+--- a/deps/lightrec/lightrec-private.h
++++ b/deps/lightrec/lightrec-private.h
+@@ -230,6 +230,8 @@ struct lightrec_dbg {
+ 	/* time in the compile queue and reaper calls (locks, waits for the compiler) */
+ 	volatile u64 t_queue, t_add, t_remove, t_reap;
+ 	volatile u32 n_add_fast, n_add_slow;
++	/* code LUT entries written by the dispatcher (threaded compiler): were empty, were stale */
++	volatile u32 n_relink_null, n_relink_stale;
+ };
+ static inline u64 lightrec_ticks(void)
+ {
+diff --git a/deps/lightrec/lightrec.c b/deps/lightrec/lightrec.c
+index 80577d05..f6220d31 100644
+--- a/deps/lightrec/lightrec.c
++++ b/deps/lightrec/lightrec.c
+@@ -136,6 +136,9 @@ void lightrec_debug_counts(u32 *c, u64 *t)
+ 	t[7] = lightrec_dbg.t_reap;
+ 	c[4] = lightrec_dbg.n_add_fast;
+ 	c[5] = lightrec_dbg.n_add_slow;
++	c[6] = lightrec_dbg.n_relink_null;
++	c[7] = lightrec_dbg.n_relink_stale;
++	c[8] = lightrec_dbg.n_loop;
+ }
+ 
+ unsigned int lightrec_bad_accesses;
+@@ -818,6 +821,44 @@ static struct block * lightrec_get_block_(struct lightrec_state *state, u32 pc)
+ 	return block;
+ }
+ 
++/*
++ * Threaded compiler: the dispatcher found a compiled block for a code LUT entry
++ * that does not point to it (cleared by a store to RAM nearby, or still
++ * pointing to the dispatcher). Without this, every later visit came back here
++ * (hundreds of thousands of times per frame while a game loaded new code). The
++ * single-threaded compiler writes the entry in that case; here the compiler
++ * thread may be killing the block (covered by a new one: it writes that
++ * block's entry point instead) or replacing its code at the same time, so the
++ * entry is written, then the block re-checked after a full barrier (the
++ * compiler thread has one before its own writes): if it changed, the entry is
++ * cleared, which only costs another lookup. A block waiting to be compiled
++ * again keeps running its current code meanwhile (as the dispatcher does), so
++ * its entry is written too: the compiler thread replaces it with the new code.
++ */
++static void lightrec_relink(struct lightrec_state *state, struct block *block,
++			    u32 pc, void *func)
++{
++	u32 offset = lut_offset(pc);
++	void *cur = lut_read(state, offset);
++
++	if (cur == func || func != block->function ||
++	    block_has_flag(block, BLOCK_IS_DEAD))
++		return;
++
++	lut_write(state, offset, func);
++	__atomic_thread_fence(__ATOMIC_SEQ_CST);
++
++	if (block->function != func || block_has_flag(block, BLOCK_IS_DEAD)) {
++		lut_write(state, offset, NULL);
++		return;
++	}
++
++	if (cur)
++		lightrec_dbg.n_relink_stale++;
++	else
++		lightrec_dbg.n_relink_null++;
++}
++
+ static void * get_next_block_func_(struct lightrec_state *state, u32 pc)
+ {
+ 	struct block *block;
+@@ -866,8 +907,11 @@ static void * get_next_block_func_(struct lightrec_state *state, u32 pc)
+ 		else
+ 			func = block->function;
+ 
+-		if (likely(func))
++		if (likely(func)) {
++			if (ENABLE_THREADED_COMPILER)
++				lightrec_relink(state, block, pc, func);
+ 			break;
++		}
+ 
+ 		if (unlikely(block_has_flag(block, BLOCK_NEVER_COMPILE))) {
+ 			pc = lightrec_emulate_block(state, block, pc);
+@@ -1843,6 +1887,10 @@ static int lightrec_compile_block_(struct lightrec_cstate *cstate,
+ 	block->function = new_fn;
+ 	block_clear_flags(block, BLOCK_SHOULD_RECOMPILE);
+ 
++	/* (pairs with lightrec_relink() on the emulation thread) */
++	if (ENABLE_THREADED_COMPILER)
++		__atomic_thread_fence(__ATOMIC_SEQ_CST);
++
+ 	/* Add compiled function to the LUT */
+ 	lut_write(state, lut_offset(block->pc), block->function);
+ 
+@@ -1878,6 +1926,11 @@ static int lightrec_compile_block_(struct lightrec_cstate *cstate,
+ 			lightrec_recompiler_remove(state->rec, block2);
+ 	}
+ 
++	/* the blocks above are marked dead before their entries are taken over
++	 * (pairs with lightrec_relink() on the emulation thread) */
++	if (ENABLE_THREADED_COMPILER)
++		__atomic_thread_fence(__ATOMIC_SEQ_CST);
++
+ 	for (i = 0; i < cstate->nb_targets; i++) {
+ 		target = &cstate->targets[i];
+ 
+diff --git a/deps/lightrec/recompiler.c b/deps/lightrec/recompiler.c
+index 917b2a0f..e5108069 100644
+--- a/deps/lightrec/recompiler.c
++++ b/deps/lightrec/recompiler.c
+@@ -413,11 +413,16 @@ static int lightrec_recompiler_add_(struct recompiler *rec, struct block *block)
+ 		pc1 = kunseg(block_rec->block->pc);
+ 		pc2 = kunseg(block->pc);
+ 		if (pc2 >= pc1 && pc2 < pc1 + block_rec->block->nb_ops * 4) {
+-			/* The block we want to compile is already covered by
+-			 * another one in the queue - increment its counter to
+-			 * increase its priority */
++			/* The block we want to compile is covered by another
++			 * one in the queue - increment that one's counter to
++			 * increase its priority, and queue this one too: left
++			 * out, it was asked for again (lock, queue walk) at
++			 * each visit while the other one waited, which is
++			 * hundreds of milliseconds while a game loads new code,
++			 * and the other one's compile only takes it over if it
++			 * is one of its branch targets. */
+ 			block_rec->requests++;
+-			goto out_unlock;
++			continue;
+ 		}
+ 	}
+ 
+-- 
+2.43.0
+

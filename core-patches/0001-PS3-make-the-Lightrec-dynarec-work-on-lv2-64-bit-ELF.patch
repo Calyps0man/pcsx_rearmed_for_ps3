@@ -1,0 +1,112 @@
+From 88a8499a8b5b4c95b388319b47e1979593a8c2d0 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 07:07:40 +0000
+Subject: [PATCH 1/2] PS3: make the Lightrec dynarec work on lv2 (64-bit ELFv1
+ PowerPC)
+
+- lightning/ppc: do not prepend a function descriptor to code whose
+  first real node is an assume_frame prolog just because a jit_live
+  node precedes it. Lightrec emits jit_live before jit_prolog when it
+  preloads the PC; the descriptor then sat where the dispatcher jumps
+  and the CPU executed it as code (SIGILL on ppc64 big-endian).
+- lightning/ppc: on lv2, flush caches by hand in jit_flush(). The PS3
+  toolchain's __clear_cache() is an empty function, so freshly
+  emitted code could be fetched stale from the instruction cache.
+- lightrec plugin: on lv2 put the code buffer in .text, the only
+  memory the OS lets a game execute (and keeps writable).
+
+Tested big-endian under qemu-ppc64: all PeterLemon CPU/GTE tests pass
+with the dynarec, and 71/72 test programs produce frames identical
+to the interpreter (the remaining one differs only in timing).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ deps/lightning/lib/jit_ppc.c  | 21 +++++++++++++++++++--
+ libpcsxcore/lightrec/plugin.c | 17 +++++++++++++++--
+ 2 files changed, 34 insertions(+), 4 deletions(-)
+
+diff --git a/deps/lightning/lib/jit_ppc.c b/deps/lightning/lib/jit_ppc.c
+index 3d506baf..a01ac1cd 100644
+--- a/deps/lightning/lib/jit_ppc.c
++++ b/deps/lightning/lib/jit_ppc.c
+@@ -1291,7 +1291,10 @@ _emit_code(jit_state_t *_jit)
+     for (node = _jitc->head; node; node = node->next)
+ 	if (node->code != jit_code_label &&
+ 	    node->code != jit_code_note &&
+-	    node->code != jit_code_name)
++	    node->code != jit_code_name &&
++	    /* emits no code; Lightrec puts one before jit_prolog() when it
++	     * preloads the PC, which must not hide an assume_frame prolog */
++	    node->code != jit_code_live)
+ 	    break;
+     if (node && (node->code != jit_code_prolog ||
+ 		 !(_jitc->functions.ptr + node->w.w)->assume_frame)) {
+@@ -2306,7 +2309,21 @@ _emit_code(jit_state_t *_jit)
+ void
+ jit_flush(void *fptr, void *tptr)
+ {
+-#if defined(__GNUC__)
++#if defined(__lv2ppu__)
++    /* The PS3 toolchain's __clear_cache() is an empty function, so the new
++     * code would sit in the data cache while the CPU fetches stale
++     * instructions. Write back the data cache lines and invalidate the
++     * instruction cache lines by hand (Cell PPU lines are 128 bytes). */
++    jit_word_t		f, t, a;
++    f = (jit_word_t)fptr & -128;
++    t = (jit_word_t)tptr;
++    for (a = f; a < t; a += 128)
++	__asm__ __volatile__ ("dcbst 0,%0" : : "r"(a) : "memory");
++    __asm__ __volatile__ ("sync" : : : "memory");
++    for (a = f; a < t; a += 128)
++	__asm__ __volatile__ ("icbi 0,%0" : : "r"(a) : "memory");
++    __asm__ __volatile__ ("sync\n\tisync" : : : "memory");
++#elif defined(__GNUC__)
+     jit_word_t		f, t, s;
+ 
+     s = sysconf(_SC_PAGE_SIZE);
+diff --git a/libpcsxcore/lightrec/plugin.c b/libpcsxcore/lightrec/plugin.c
+index 575bdbd9..21bfac04 100644
+--- a/libpcsxcore/lightrec/plugin.c
++++ b/libpcsxcore/lightrec/plugin.c
+@@ -70,6 +70,15 @@ Rcnt rcnts[4];
+ 
+ void* code_buffer;
+ 
++#if defined(__lv2ppu__)
++/* The PS3 OS only lets a game execute code from its own loaded image, and that
++ * image's text pages stay writable at run time. So the dynarec's code buffer
++ * is reserved inside .text. (The "#" ends the section flags gcc emits, which
++ * would otherwise clash with .text's.) */
++static unsigned char ps3_code_buffer[CODE_BUFFER_SIZE]
++	__attribute__((aligned(4096), used, section(".text.lightrec_code #")));
++#endif
++
+ static struct lightrec_state *lightrec_state;
+ 
+ static bool use_lightrec_interpreter;
+@@ -395,7 +404,9 @@ static int lightrec_plugin_init(void)
+ 	lightrec_map[PSX_MAP_PARALLEL_PORT].address = psxRegs.ptrs.psxP;
+ 
+ 	if (!LIGHTREC_CUSTOM_MAP) {
+-#if P_HAVE_MMAP
++#if defined(__lv2ppu__)
++		code_buffer = ps3_code_buffer;
++#elif P_HAVE_MMAP
+ 		code_buffer = mmap(0, CODE_BUFFER_SIZE,
+ 				   PROT_EXEC | PROT_READ | PROT_WRITE,
+ 				   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+@@ -693,7 +704,9 @@ static void lightrec_plugin_shutdown(void)
+ 	lightrec_destroy(lightrec_state);
+ 
+ 	if (!LIGHTREC_CUSTOM_MAP) {
+-#if P_HAVE_MMAP
++#if defined(__lv2ppu__)
++		/* static buffer in .text: nothing to free */
++#elif P_HAVE_MMAP
+ 		munmap(code_buffer, CODE_BUFFER_SIZE);
+ #else
+ 		free(code_buffer);
+-- 
+2.43.0
+

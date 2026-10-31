@@ -1,0 +1,119 @@
+From eff884826a8ebc8eeec422f745e21eba61eee567 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 29 Oct 2026 09:00:51 +0000
+Subject: [PATCH] Front-end diagnostics: psx_debug_state() for hang reports,
+ MDEC output DMA count
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ libpcsxcore/cdrom.c |  9 +++++++++
+ libpcsxcore/mdec.c  |  4 ++++
+ libpcsxcore/mdec.h  |  1 +
+ libpcsxcore/misc.c  | 23 +++++++++++++++++++++++
+ 4 files changed, 37 insertions(+)
+
+diff --git a/libpcsxcore/cdrom.c b/libpcsxcore/cdrom.c
+index 11c435f8..81a5188e 100644
+--- a/libpcsxcore/cdrom.c
++++ b/libpcsxcore/cdrom.c
+@@ -21,6 +21,7 @@
+ * Handles all CD-ROM registers and functions.
+ */
+ 
++#include <stdio.h>
+ #include <stdalign.h>
+ #include <assert.h>
+ #include "cdrom.h"
+@@ -1739,6 +1740,14 @@ static void getCdInfo(void)
+ 	cdra_getStatus(&cdr_stat);
+ }
+ 
++/* one line for a front end's hang report (read from another thread: a snapshot) */
++int cdrDebugState(char *b, int n)
++{
++	return snprintf(b, n, "cdrom: stat %02x drive %d reading %u cmd %02x in progress %04x irq %02x/%02x pending %u setloc %u",
++		cdr.StatP, cdr.DriveState, (unsigned)cdr.Reading, cdr.Cmd, cdr.CmdInProgress,
++		cdr.IrqStat, cdr.IrqMask, cdr.Irq1Pending, cdr.SetlocPending);
++}
++
+ void cdrReset() {
+ 	memset(&cdr, 0, sizeof(cdr));
+ 	cdr.CurTrack = 1;
+diff --git a/libpcsxcore/mdec.c b/libpcsxcore/mdec.c
+index eda48334..213f36c9 100644
+--- a/libpcsxcore/mdec.c
++++ b/libpcsxcore/mdec.c
+@@ -235,12 +235,16 @@ void mdec0Interrupt()
+ #define SIZE_OF_24B_BLOCK (16*16*3)
+ #define SIZE_OF_16B_BLOCK (16*16*2)
+ 
++unsigned int mdec_dma1_count;
++
+ void psxDma1(u32 adr, u32 bcr, u32 chcr) {
+ 	u32 words, words_max = 0;
+ 	int blk[DSIZE2 * 6];
+ 	u8 * image;
+ 	int size;
+ 
++	mdec_dma1_count++;   /* front ends: an FMV is playing */
++
+ 	if (chcr != 0x01000200) {
+ 		log_unhandled("mdec1: invalid dma %08x\n", chcr);
+ 		return;
+diff --git a/libpcsxcore/mdec.h b/libpcsxcore/mdec.h
+index a99aa881..94923009 100644
+--- a/libpcsxcore/mdec.h
++++ b/libpcsxcore/mdec.h
+@@ -35,6 +35,7 @@ void mdecWrite1(u32 data);
+ u32 mdecRead0();
+ u32 mdecRead1();
+ void psxDma0(u32 madr, u32 bcr, u32 chcr);
++extern unsigned int mdec_dma1_count;   /* MDEC output DMAs so far (FMV detection) */
+ void psxDma1(u32 madr, u32 bcr, u32 chcr);
+ void mdec0Interrupt();
+ void mdec1Interrupt();
+diff --git a/libpcsxcore/misc.c b/libpcsxcore/misc.c
+index 5eae9cfc..271dce35 100644
+--- a/libpcsxcore/misc.c
++++ b/libpcsxcore/misc.c
+@@ -27,6 +27,7 @@
+ #include <errno.h>
+ #include <assert.h>
+ #include "misc.h"
++#include "psxcounters.h"
+ #include "cdrom.h"
+ #include "cdrom-async.h"
+ #include "mdec.h"
+@@ -50,6 +51,28 @@ static u32 save_counter;
+ /* step of SaveState/LoadState in progress, for front ends that report hangs */
+ const char *volatile psx_state_step;
+ #define STEP(x) (psx_state_step = (x))
++
++/* PS1 CPU, interrupt and CD-ROM state as text, for a front end's hang report.
++   Read from another thread while the emulator may be running: a snapshot. Two
++   calls a few seconds apart tell a stuck host-side wait (nothing moves) from a
++   game waiting in a loop (pc/cycle move, interrupts pending or masked). */
++int cdrDebugState(char *b, int n);
++void psx_debug_state(char *b, int n)
++{
++	u32 pc = psxRegs.pc, code[4] = { 0, }, i;
++	int k;
++	if ((pc & 0x1fffffff) < 0x800000 && !(pc & 3))
++		for (i = 0; i < 4; i++)
++			code[i] = psxMu32(pc + i * 4);
++	k = snprintf(b, n, "pc %08x [%08x %08x %08x %08x] ra %08x sp %08x cycle %u next event %u "
++		"sr %08x cause %08x istat %04x imask %04x events %08x frame %u hsync %u step %s; ",
++		pc, code[0], code[1], code[2], code[3], psxRegs.GPR.n.ra, psxRegs.GPR.n.sp,
++		psxRegs.cycle, psxRegs.next_interupt, psxRegs.CP0.n.SR, psxRegs.CP0.n.Cause,
++		psxHu32(0x1070), psxHu32(0x1074), psxRegs.interrupt, frame_counter, hSyncCount,
++		psx_state_step ? psx_state_step : "-");
++	if (k > 0 && k < n)
++		cdrDebugState(b + k, n - k);
++}
+ static char *manuallyLoadedExePath;
+ 
+ // PSX Executable types
+-- 
+2.43.0
+

@@ -1,0 +1,194 @@
+From 81360c596f7e82b2c586357316845639312a3088 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 22:42:09 +0000
+Subject: [PATCH] Lightrec: time spent finding, translating, interpreting and
+ compiling blocks (for the slow-frame log)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ deps/lightrec/interpreter.c      |  4 ++++
+ deps/lightrec/lightrec-private.h | 15 +++++++++++++++
+ deps/lightrec/lightrec.c         | 22 +++++++++++++++++++++-
+ deps/lightrec/reaper.c           |  4 ++++
+ deps/lightrec/recompiler.c       | 17 +++++++++++++++++
+ 5 files changed, 61 insertions(+), 1 deletion(-)
+
+diff --git a/deps/lightrec/interpreter.c b/deps/lightrec/interpreter.c
+index d0727e1d..0074c258 100644
+--- a/deps/lightrec/interpreter.c
++++ b/deps/lightrec/interpreter.c
+@@ -1229,8 +1229,12 @@ u32 lightrec_emulate_block(struct lightrec_state *state, struct block *block, u3
+ 		u32 ret;
+ 		LR_DBG_ENTER(LR_INTERP, pc, block->pc);
+ 
++		static int depth;
++		u64 t0 = depth++ ? 0 : lightrec_ticks();
+ 		lightrec_dbg.n_interp++;
+ 		ret = lightrec_emulate_block_list(state, block, offset);
++		if (!--depth)
++			lightrec_dbg.t_interp += lightrec_ticks() - t0;
+ 		LR_DBG_LEAVE();
+ 		return ret;
+ 	}
+diff --git a/deps/lightrec/lightrec-private.h b/deps/lightrec/lightrec-private.h
+index 78a9df6a..7c062518 100644
+--- a/deps/lightrec/lightrec-private.h
++++ b/deps/lightrec/lightrec-private.h
+@@ -218,7 +218,22 @@ void remove_from_code_lut(struct blockcache *cache, struct block *block);
+ struct lightrec_dbg {
+ 	volatile u32 where, pc, arg;
+ 	volatile u32 n_exec, n_next, n_loop, n_c, n_interp, n_comp, n_precomp;
++	/* blocks found changed (code overwritten) and dropped; time (timebase ticks,
++	   PowerPC hosts) spent finding blocks (incl. checking and precompiling them),
++	   precompiling, interpreting (emulation thread) and compiling (any thread) */
++	volatile u32 n_outdated;
++	volatile u64 t_lookup, t_precomp, t_interp, t_comp;
++	/* time in the compile queue and reaper calls (locks, waits for the compiler) */
++	volatile u64 t_queue;
+ };
++static inline u64 lightrec_ticks(void)
++{
++#if defined(__powerpc__) || defined(__ppc__) || defined(__PPC__)
++	return __builtin_ppc_get_timebase();
++#else
++	return 0;
++#endif
++}
+ extern struct lightrec_dbg lightrec_dbg;
+ enum {
+ 	LR_OUTSIDE, LR_EXECUTE, LR_NATIVE, LR_NEXT_BLOCK, LR_INTERP, LR_COMPILE,
+diff --git a/deps/lightrec/lightrec.c b/deps/lightrec/lightrec.c
+index c001a55c..b6cee231 100644
+--- a/deps/lightrec/lightrec.c
++++ b/deps/lightrec/lightrec.c
+@@ -120,11 +120,17 @@ static const struct lightrec_mem_map_ops lightrec_default_ops = {
+ struct lightrec_dbg lightrec_dbg;
+ 
+ /* blocks run by the interpreter, blocks compiled (by any thread), blocks found */
+-void lightrec_debug_counts(u32 *c)
++void lightrec_debug_counts(u32 *c, u64 *t)
+ {
+ 	c[0] = lightrec_dbg.n_interp;
+ 	c[1] = lightrec_dbg.n_comp;
+ 	c[2] = lightrec_dbg.n_precomp;
++	c[3] = lightrec_dbg.n_outdated;
++	t[0] = lightrec_dbg.t_lookup;
++	t[1] = lightrec_dbg.t_precomp;
++	t[2] = lightrec_dbg.t_interp;
++	t[3] = lightrec_dbg.t_comp;
++	t[4] = lightrec_dbg.t_queue;
+ }
+ 
+ unsigned int lightrec_bad_accesses;
+@@ -747,13 +753,23 @@ static void lightrec_cp_cb(struct lightrec_state *state, u32 arg)
+ 	LR_DBG_LEAVE();
+ }
+ 
++static struct block * lightrec_get_block_(struct lightrec_state *state, u32 pc);
+ static struct block * lightrec_get_block(struct lightrec_state *state, u32 pc)
++{
++	u64 t0 = lightrec_ticks();
++	struct block *block = lightrec_get_block_(state, pc);
++	lightrec_dbg.t_lookup += lightrec_ticks() - t0;
++	return block;
++}
++
++static struct block * lightrec_get_block_(struct lightrec_state *state, u32 pc)
+ {
+ 	struct block *block = lightrec_find_block(state->block_cache, pc);
+ 	u8 old_flags;
+ 
+ 	if (block && lightrec_block_is_outdated(state, block)) {
+ 		pr_debug("Block at "PC_FMT" is outdated!\n", block->pc);
++		lightrec_dbg.n_outdated++;
+ 
+ 		old_flags = block_set_flags(block, BLOCK_IS_DEAD);
+ 		if (!(old_flags & BLOCK_IS_DEAD)) {
+@@ -779,8 +795,10 @@ static struct block * lightrec_get_block(struct lightrec_state *state, u32 pc)
+ 	if (!block) {
+ 		{
+ 			LR_DBG_ENTER(LR_PRECOMPILE, pc, 0);
++			u64 t0 = lightrec_ticks();
+ 			lightrec_dbg.n_precomp++;
+ 			block = lightrec_precompile_block(state, pc);
++			lightrec_dbg.t_precomp += lightrec_ticks() - t0;
+ 			LR_DBG_LEAVE();
+ 		}
+ 		if (!block) {
+@@ -1670,8 +1688,10 @@ int lightrec_compile_block(struct lightrec_cstate *cstate,
+ 	int ret;
+ 	LR_DBG_ENTER(LR_COMPILE, block->pc, 0);
+ 
++	u64 t0 = lightrec_ticks();
+ 	lightrec_dbg.n_comp++;
+ 	ret = lightrec_compile_block_(cstate, block);
++	__atomic_fetch_add(&lightrec_dbg.t_comp, lightrec_ticks() - t0, __ATOMIC_RELAXED);
+ 	LR_DBG_LEAVE();
+ 	return ret;
+ }
+diff --git a/deps/lightrec/reaper.c b/deps/lightrec/reaper.c
+index d12b2089..661f0e7f 100644
+--- a/deps/lightrec/reaper.c
++++ b/deps/lightrec/reaper.c
+@@ -123,9 +123,12 @@ void lightrec_reaper_reap(struct reaper *reaper)
+ 	 * frame) and the list is nearly always empty: look without the mutex,
+ 	 * which is a system call on some hosts (PS3). Something added while we
+ 	 * look is reaped on the next call. */
++	u64 t0;
++
+ 	if (!__atomic_load_n(&reaper->reap_list.next, __ATOMIC_ACQUIRE))
+ 		return;
+ 
++	t0 = lightrec_ticks();
+ 	pthread_mutex_lock(&reaper->mutex);
+ 
+ 	while (lightrec_reaper_can_reap(reaper) &&
+@@ -147,6 +150,7 @@ void lightrec_reaper_reap(struct reaper *reaper)
+ 	}
+ 
+ 	pthread_mutex_unlock(&reaper->mutex);
++	__atomic_fetch_add(&lightrec_dbg.t_queue, lightrec_ticks() - t0, __ATOMIC_RELAXED);
+ }
+ 
+ void lightrec_reaper_pause(struct reaper *reaper)
+diff --git a/deps/lightrec/recompiler.c b/deps/lightrec/recompiler.c
+index 357b2477..bc17ffbe 100644
+--- a/deps/lightrec/recompiler.c
++++ b/deps/lightrec/recompiler.c
+@@ -328,7 +328,16 @@ void lightrec_free_recompiler(struct recompiler *rec)
+ 	lightrec_free(rec->state, MEM_FOR_LIGHTREC, sizeof(*rec), rec);
+ }
+ 
++static int lightrec_recompiler_add_(struct recompiler *rec, struct block *block);
+ int lightrec_recompiler_add(struct recompiler *rec, struct block *block)
++{
++	u64 t0 = lightrec_ticks();
++	int ret = lightrec_recompiler_add_(rec, block);
++	__atomic_fetch_add(&lightrec_dbg.t_queue, lightrec_ticks() - t0, __ATOMIC_RELAXED);
++	return ret;
++}
++
++static int lightrec_recompiler_add_(struct recompiler *rec, struct block *block)
+ {
+ 	struct slist_elm *elm;
+ 	struct block_rec *block_rec;
+@@ -412,7 +421,15 @@ out_unlock:
+ 	return ret;
+ }
+ 
++static void lightrec_recompiler_remove_(struct recompiler *rec, struct block *block);
+ void lightrec_recompiler_remove(struct recompiler *rec, struct block *block)
++{
++	u64 t0 = lightrec_ticks();
++	lightrec_recompiler_remove_(rec, block);
++	__atomic_fetch_add(&lightrec_dbg.t_queue, lightrec_ticks() - t0, __ATOMIC_RELAXED);
++}
++
++static void lightrec_recompiler_remove_(struct recompiler *rec, struct block *block)
+ {
+ 	struct block_rec *block_rec;
+ 	struct slist_elm *elm;
+-- 
+2.43.0
+

@@ -1,0 +1,33 @@
+From a1bf904221dafc56ee6725dbf3d2254251fb7f8d Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 29 Oct 2026 08:26:22 +0000
+Subject: [PATCH] SaveState: separate steps for the dynarec blocks, the pads
+ and closing
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ libpcsxcore/misc.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/libpcsxcore/misc.c b/libpcsxcore/misc.c
+index 5db3dd20..5eae9cfc 100644
+--- a/libpcsxcore/misc.c
++++ b/libpcsxcore/misc.c
+@@ -879,10 +879,12 @@ int SaveState(const char *file) {
+ 	psxRcntFreeze(f, 1);
+ 	STEP("save: mdec");
+ 	mdecFreeze(f, 1);
+-	STEP("save: pad");
++	STEP("save: dynarec blocks");
+ 	ndrc_freeze(f, 1);
++	STEP("save: pad");
+ 	padFreeze(f, 1);
+ 
++	STEP("save: closing");
+ 	memset(misc, 0xff, sizeof(*misc));
+ 	SaveFuncs.close(f);
+ 	STEP(NULL);
+-- 
+2.43.0
+

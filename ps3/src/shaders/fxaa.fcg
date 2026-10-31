@@ -1,0 +1,54 @@
+/* FXAA 3.11 "console" path (Timothy Lottes), the variant written for the PS3's
+   RSX: green as luma, 4 corner taps (positions from the vertex program), then 2
+   or 4 taps along the edge. Half precision where it does not matter: the RSX
+   keeps more pixels in flight with 16-bit registers.
+   No early return and no branch: with an early return Cg wrote the colour
+   output first and kept using H0 as a temporary, which cgcomp also uses for the
+   output (the build checks every program for that: tools/fpcheck.py); and the
+   only program with an IF still drew dark "cartoon" outlines on the console,
+   so the edge result is computed for every pixel and selected.
+   DITHER: the result with the PS1 dither pattern (dither.h). */
+#ifndef DITHER
+#define DITHER 0
+#endif
+#if FXAA_FLOAT        /* full precision build, used if the half one fails its start-up test */
+#define half float
+#define half2 float2
+#define half4 float4
+#define h4tex2D tex2D
+#endif
+#if DITHER
+#include "dither.h"
+#endif
+half4 main(float2 uv : TEXCOORD0, float2 texel : TEXCOORD1, float4 nwne : TEXCOORD2, float4 swse : TEXCOORD3,
+#if DITHER
+           float2 native : TEXCOORD4,
+#endif
+           uniform sampler2D tex) : COLOR
+{
+    half lNW = h4tex2D(tex, nwne.xy).g;
+    half lNE = h4tex2D(tex, nwne.zw).g;
+    half lSW = h4tex2D(tex, swse.xy).g;
+    half lSE = h4tex2D(tex, swse.zw).g;
+    half4 res = h4tex2D(tex, uv);
+    half lM = res.g + 1.0h / 384.0h;
+    half lMax = max(max(lNE, lSE), max(lNW, lSW));
+    half lMin = min(min(lNE, lSE), min(lNW, lSW));
+    half lMaxS = max(lMax, lM), lMinM = min(lMin, lM);
+    half2 dir = half2((lSW + lSE) - (lNW + lNE), (lNW + lSW) - (lNE + lSE));
+    /* no NaNs: normalize() of a zero vector, and 0/0 for edges along an axis */
+    half2 d1 = dir * rsqrt(max(dot(dir, dir), 1.0e-4h));
+    float2 o1 = (float2)d1 * (0.5f * texel);
+    half4 a = h4tex2D(tex, uv - o1) + h4tex2D(tex, uv + o1);
+    half2 d2 = clamp(d1 / max(min(abs(d1.x), abs(d1.y)) * 8.0h, 1.0h / 64.0h), half2(-2.0h, -2.0h), half2(2.0h, 2.0h));
+    float2 o2 = (float2)d2 * (2.0f * texel);
+    half4 b = (h4tex2D(tex, uv - o2) + h4tex2D(tex, uv + o2)) * 0.25h + a * 0.25h;
+    half4 e = (b.g < lMin || b.g > lMax) ? a * 0.5h : b;
+    /* flat areas stay as they are: a select, not a branch (no IF in the program) */
+    half edge = (lMaxS - lMinM >= max(0.05h, lMaxS * 0.125h)) ? 1.0h : 0.0h;
+#if DITHER
+    return dither5(lerp(res, e, edge), native);
+#else
+    return lerp(res, e, edge);
+#endif
+}

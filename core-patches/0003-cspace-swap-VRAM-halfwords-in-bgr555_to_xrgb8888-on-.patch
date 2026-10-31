@@ -1,0 +1,32 @@
+From 12b7a5bc96ea48e6df7421ae52e461a381887abd Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 09:05:56 +0000
+Subject: [PATCH] cspace: swap VRAM halfwords in bgr555_to_xrgb8888 on
+ big-endian
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ frontend/cspace.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/frontend/cspace.c b/frontend/cspace.c
+index 3efd19fb..a43a4575 100644
+--- a/frontend/cspace.c
++++ b/frontend/cspace.c
+@@ -179,7 +179,11 @@ void bgr888_to_rgb888(void * __restrict__ dst_,
+ 
+ static inline uint32_t bgr555_to_xrgb8888_one(uint16_t p)
+ {
+-	uint32_t t = ((p << 19) | (p >> 7)) & 0xf800f8;
++	uint32_t t;
++#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
++	p = SWAP16(p);	/* VRAM is little-endian, like the rgb565 paths assume */
++#endif
++	t = ((p << 19) | (p >> 7)) & 0xf800f8;
+ 	t |= (p << 6) & 0xf800;
+ 	return t | ((t >> 5) & 0x070707);
+ }
+-- 
+2.43.0
+

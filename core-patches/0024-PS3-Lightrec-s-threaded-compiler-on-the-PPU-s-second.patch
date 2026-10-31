@@ -1,0 +1,388 @@
+From 1178152c28317971a4bc845c3c52c2541bfeba80 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 21:29:50 +0000
+Subject: [PATCH] PS3: Lightrec's threaded compiler on the PPU's second thread,
+ switched at run time
+
+Lightrec compiled every new block on the emulation thread: a game loading a lot
+of new code at once (GT2's race start: about 2000 blocks) held frames up to
+275 ms. Its threaded compiler runs blocks in the interpreter until a worker has
+compiled them.
+
+- psl1ght builds it (LIGHTREC_THREADED_COMPILER), with LIGHTREC_THREADED_RUNTIME:
+  ENABLE_THREADED_COMPILER is then a variable, and the structures and atomics it
+  needs are always built (LIGHTREC_THREADED_BUILT replaces the #if tests).
+  lightrec_plugin_set_threaded() restarts Lightrec when the front end's setting
+  changes (before a game is loaded).
+- libpcsxcore/lightrec/ps3: the POSIX thread calls Lightrec uses, on lv2 PPU
+  threads, mutexes and condition variables (made at the first wait, as lv2 ties
+  a condition variable to its mutex). One worker, just below the emulator's
+  priority.
+- The threaded compiler's code-buffer flush (from the reaper, outside block
+  code) frees every block, as the single-threaded path does since 0018:
+  removing only outdated blocks rarely freed anything, and new blocks would
+  then only ever be interpreted.
+
+Host check (ppc64 big-endian under QEMU, Linux threads): the 72 test programs
+give the same frames threaded, switched off at run time, and with the previous
+build.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ Makefile.libretro                  |   6 ++
+ deps/lightrec/lightrec-private.h   |  10 +--
+ deps/lightrec/lightrec.c           |   2 +-
+ deps/lightrec/memmanager.c         |   2 +-
+ deps/lightrec/recompiler.c         |  10 ++-
+ include/lightrec/lightrec-config.h |   9 +++
+ libpcsxcore/lightrec/plugin.c      |  24 ++++++
+ libpcsxcore/lightrec/ps3/pthread.c | 121 +++++++++++++++++++++++++++++
+ libpcsxcore/lightrec/ps3/pthread.h |  27 +++++++
+ 9 files changed, 203 insertions(+), 8 deletions(-)
+ create mode 100644 libpcsxcore/lightrec/ps3/pthread.c
+ create mode 100644 libpcsxcore/lightrec/ps3/pthread.h
+
+diff --git a/Makefile.libretro b/Makefile.libretro
+index 85d82942..df6af909 100644
+--- a/Makefile.libretro
++++ b/Makefile.libretro
+@@ -320,6 +320,12 @@ else ifeq ($(platform), psl1ght)
+ 	USE_ASYNC_CDROM = 1
+   libpcsxcore/cdrom-async.o frontend/libretro.o: CFLAGS += -DHAVE_CDROM
+ 	USE_ASYNC_GPU = 1
++	# Lightrec's threaded compiler, switched on or off at run time by the front end;
++	# its few POSIX thread calls come from libpcsxcore/lightrec/ps3 (lv2 threads)
++	LIGHTREC_THREADED_COMPILER := 1
++	CFLAGS += -DLIGHTREC_THREADED_RUNTIME=1
++  deps/lightrec/%.o: CFLAGS += -Ilibpcsxcore/lightrec/ps3
++	OBJS += libpcsxcore/lightrec/ps3/pthread.o
+ 	# pcsxr-threads.c has its own lv2 thread code
+ 	NO_FEATURES_CPU = 1
+ 	USE_ASYNC_SPU = 0
+diff --git a/deps/lightrec/lightrec-private.h b/deps/lightrec/lightrec-private.h
+index 0c3eb3e2..78a9df6a 100644
+--- a/deps/lightrec/lightrec-private.h
++++ b/deps/lightrec/lightrec-private.h
+@@ -12,7 +12,7 @@
+ #include "lightrec.h"
+ #include "regcache.h"
+ 
+-#if ENABLE_THREADED_COMPILER
++#if LIGHTREC_THREADED_BUILT
+ #include <stdatomic.h>
+ #endif
+ 
+@@ -124,7 +124,7 @@ struct block {
+ 	u32 precompile_date;
+ 	unsigned int code_size;
+ 	u16 nb_ops;
+-#if ENABLE_THREADED_COMPILER
++#if LIGHTREC_THREADED_BUILT
+ 	_Atomic u8 flags;
+ #else
+ 	u8 flags;
+@@ -351,7 +351,7 @@ static inline s16 s16_max(s16 a, s16 b)
+ 
+ static inline _Bool block_has_flag(struct block *block, u8 flag)
+ {
+-#if ENABLE_THREADED_COMPILER
++#if LIGHTREC_THREADED_BUILT
+ 	return atomic_load_explicit(&block->flags, memory_order_relaxed) & flag;
+ #else
+ 	return block->flags & flag;
+@@ -360,7 +360,7 @@ static inline _Bool block_has_flag(struct block *block, u8 flag)
+ 
+ static inline u8 block_set_flags(struct block *block, u8 mask)
+ {
+-#if ENABLE_THREADED_COMPILER
++#if LIGHTREC_THREADED_BUILT
+ 	return atomic_fetch_or_explicit(&block->flags, mask,
+ 					memory_order_relaxed);
+ #else
+@@ -374,7 +374,7 @@ static inline u8 block_set_flags(struct block *block, u8 mask)
+ 
+ static inline u8 block_clear_flags(struct block *block, u8 mask)
+ {
+-#if ENABLE_THREADED_COMPILER
++#if LIGHTREC_THREADED_BUILT
+ 	return atomic_fetch_and_explicit(&block->flags, ~mask,
+ 					 memory_order_relaxed);
+ #else
+diff --git a/deps/lightrec/lightrec.c b/deps/lightrec/lightrec.c
+index 728e96d0..7211a301 100644
+--- a/deps/lightrec/lightrec.c
++++ b/deps/lightrec/lightrec.c
+@@ -22,7 +22,7 @@
+ #include <errno.h>
+ #include <inttypes.h>
+ #include <limits.h>
+-#if ENABLE_THREADED_COMPILER
++#if LIGHTREC_THREADED_BUILT
+ #include <stdatomic.h>
+ #endif
+ #include <stdbool.h>
+diff --git a/deps/lightrec/memmanager.c b/deps/lightrec/memmanager.c
+index 2934d4c7..9735499e 100644
+--- a/deps/lightrec/memmanager.c
++++ b/deps/lightrec/memmanager.c
+@@ -9,7 +9,7 @@
+ 
+ #include <stdlib.h>
+ 
+-#if ENABLE_THREADED_COMPILER
++#if LIGHTREC_THREADED_BUILT
+ #include <stdatomic.h>
+ 
+ static atomic_uint lightrec_bytes[MEM_TYPE_END];
+diff --git a/deps/lightrec/recompiler.c b/deps/lightrec/recompiler.c
+index 56911703..85310361 100644
+--- a/deps/lightrec/recompiler.c
++++ b/deps/lightrec/recompiler.c
+@@ -116,11 +116,19 @@ static void lightrec_cancel_list(struct recompiler *rec)
+ 	}
+ }
+ 
++extern unsigned int lightrec_code_flushes;
++
+ static void lightrec_flush_code_buffer(struct lightrec_state *state, void *d)
+ {
+ 	struct recompiler *rec = d;
+ 
+-	lightrec_remove_outdated_blocks(state->block_cache, NULL);
++	/* Runs from the reaper, outside block code, with the compiler idle: free
++	 * every block, as the single-threaded compiler does when the buffer is full
++	 * (lightrec_remove_outdated_blocks() alone rarely frees anything: its age
++	 * test compares against a cycle counter reset at every exit, so the buffer
++	 * stayed full and new blocks were only ever interpreted). */
++	lightrec_free_all_blocks_except(state->block_cache, NULL);
++	lightrec_code_flushes++;
+ 	rec->must_flush = false;
+ }
+ 
+diff --git a/include/lightrec/lightrec-config.h b/include/lightrec/lightrec-config.h
+index 19b852ce..23e5cf63 100644
+--- a/include/lightrec/lightrec-config.h
++++ b/include/lightrec/lightrec-config.h
+@@ -6,7 +6,16 @@
+ #ifndef __LIGHTREC_CONFIG_H__
+ #define __LIGHTREC_CONFIG_H__
+ 
++#if LIGHTREC_THREADED_RUNTIME && LIGHTREC_ENABLE_THREADED_COMPILER
++/* PS3: built with the threaded compiler, switched on or off at run time (a front-end
++   setting; lightrec_plugin_set_threaded() restarts Lightrec when it changes) */
++extern int lightrec_threaded_compiler;
++#define ENABLE_THREADED_COMPILER lightrec_threaded_compiler
++#define LIGHTREC_THREADED_BUILT 1
++#else
+ #define ENABLE_THREADED_COMPILER LIGHTREC_ENABLE_THREADED_COMPILER
++#define LIGHTREC_THREADED_BUILT LIGHTREC_ENABLE_THREADED_COMPILER
++#endif
+ #define ENABLE_FIRST_PASS 1
+ #define ENABLE_DISASSEMBLER LIGHTREC_ENABLE_DISASSEMBLER
+ #define ENABLE_CODE_BUFFER 1
+diff --git a/libpcsxcore/lightrec/plugin.c b/libpcsxcore/lightrec/plugin.c
+index 53a33505..052797b1 100644
+--- a/libpcsxcore/lightrec/plugin.c
++++ b/libpcsxcore/lightrec/plugin.c
+@@ -713,6 +713,7 @@ static void lightrec_plugin_apply_config()
+ static void lightrec_plugin_shutdown(void)
+ {
+ 	lightrec_destroy(lightrec_state);
++	lightrec_state = NULL;
+ 
+ 	if (!LIGHTREC_CUSTOM_MAP) {
+ #if defined(__lv2ppu__)
+@@ -725,6 +726,29 @@ static void lightrec_plugin_shutdown(void)
+ 	}
+ }
+ 
++#if LIGHTREC_THREADED_RUNTIME && LIGHTREC_ENABLE_THREADED_COMPILER
++int lightrec_threaded_compiler = 1;
++
++/* The front end's setting, before a game is loaded: Lightrec compiles new blocks on
++ * a second thread (they run in Lightrec's interpreter until compiled, so a burst of
++ * new code no longer holds up the frame), or on the emulation thread. Lightrec is
++ * restarted when it changes; the game's reset rebuilds its blocks anyway. */
++void lightrec_plugin_set_threaded(int on)
++{
++	on = !!on;
++	if (on == lightrec_threaded_compiler)
++		return;
++	if (lightrec_state && psxCpu == &psxRec) {
++		lightrec_plugin_shutdown();
++		lightrec_threaded_compiler = on;
++		lightrec_plugin_init();
++	} else {
++		lightrec_threaded_compiler = on;
++	}
++	SysPrintf("lightrec: blocks compiled %s\n", on ? "on a second thread" : "on the emulation thread");
++}
++#endif
++
+ static void lightrec_plugin_reset(void)
+ {
+ 	struct lightrec_registers *regs;
+diff --git a/libpcsxcore/lightrec/ps3/pthread.c b/libpcsxcore/lightrec/ps3/pthread.c
+new file mode 100644
+index 00000000..0a46241f
+--- /dev/null
++++ b/libpcsxcore/lightrec/ps3/pthread.c
+@@ -0,0 +1,121 @@
++/* lv2 versions of the POSIX thread calls Lightrec's threaded compiler uses (see
++ * pthread.h). Error returns are lv2 codes (non-zero), which is all Lightrec tests. */
++#include <stdlib.h>
++#include <string.h>
++#include <sys/thread.h>
++#include <sys/mutex.h>
++#include <sys/cond.h>
++#include "pthread.h"
++
++/* the compiler worker: just below the emulator thread (priority 1000), so it uses
++   the PPU's second hardware thread without ever pushing the emulation aside */
++#define WORKER_PRIORITY 1001
++#define WORKER_STACK (512 * 1024)
++
++struct start_box { void *(*start)(void *); void *arg; };
++
++static void trampoline(void *p)
++{
++	struct start_box b = *(struct start_box *)p;
++	free(p);
++	b.start(b.arg);
++	sysThreadExit(0);
++}
++
++int pthread_create(pthread_t *t, const pthread_attr_t *attr, void *(*start)(void *), void *arg)
++{
++	struct start_box *b = malloc(sizeof *b);
++	sys_ppu_thread_t id;
++	s32 r;
++	(void)attr;
++	if (!b)
++		return -1;
++	b->start = start; b->arg = arg;
++	r = sysThreadCreate(&id, trampoline, b, WORKER_PRIORITY, WORKER_STACK, THREAD_JOINABLE, (char *)"lightrec compiler");
++	if (r) {
++		free(b);
++		return r;
++	}
++	t->id = id;
++	return 0;
++}
++
++int pthread_join(pthread_t t, void **ret)
++{
++	u64 v;
++	s32 r = sysThreadJoin(t.id, &v);
++	if (ret)
++		*ret = NULL;
++	return r;
++}
++
++static sys_mutex_t new_mutex(void)
++{
++	sys_mutex_attr_t a;
++	sys_mutex_t m = 0;
++	memset(&a, 0, sizeof a);
++	a.attr_protocol = SYS_MUTEX_PROTOCOL_PRIO;
++	a.attr_recursive = SYS_MUTEX_ATTR_NOT_RECURSIVE;
++	a.attr_pshared = SYS_MUTEX_ATTR_NOT_PSHARED;
++	a.attr_adaptive = SYS_MUTEX_ATTR_NOT_ADAPTIVE;
++	memcpy(a.name, "lightrc", 8);
++	return sysMutexCreate(&m, &a) ? 0 : m;
++}
++
++int pthread_mutex_init(pthread_mutex_t *m, const pthread_mutexattr_t *attr)
++{
++	(void)attr;
++	m->id = new_mutex();
++	return m->id ? 0 : -1;
++}
++int pthread_mutex_destroy(pthread_mutex_t *m) { return sysMutexDestroy(m->id); }
++int pthread_mutex_lock(pthread_mutex_t *m) { return sysMutexLock(m->id, 0); }
++int pthread_mutex_unlock(pthread_mutex_t *m) { return sysMutexUnlock(m->id); }
++
++/* guards making condition variables (two threads may wait on a new one at once) */
++static sys_mutex_t make_lock;
++
++int pthread_cond_init(pthread_cond_t *c, const pthread_condattr_t *attr)
++{
++	(void)attr;
++	c->id = c->mutex = 0;
++	c->made = 0;
++	if (!make_lock)                  /* first use: Lightrec initialises on one thread */
++		make_lock = new_mutex();
++	return make_lock ? 0 : -1;
++}
++
++int pthread_cond_destroy(pthread_cond_t *c)
++{
++	if (c->made)
++		sysCondDestroy(c->id);
++	c->made = 0;
++	return 0;
++}
++
++int pthread_cond_wait(pthread_cond_t *c, pthread_mutex_t *m)
++{
++	if (!c->made) {
++		sysMutexLock(make_lock, 0);
++		if (!c->made) {
++			sys_cond_attr_t a;
++			memset(&a, 0, sizeof a);
++			a.attr_pshared = SYS_COND_ATTR_PSHARED;   /* 0x200, as sysCondAttrInitialize sets it (lv2: not process-shared) */
++			memcpy(a.name, "lightrc", 8);
++			if (sysCondCreate(&c->id, m->id, &a)) {
++				sysMutexUnlock(make_lock);
++				return -1;
++			}
++			c->mutex = m->id;
++			__asm__ volatile("lwsync" : : : "memory");
++			c->made = 1;
++		}
++		sysMutexUnlock(make_lock);
++	}
++	return sysCondWait(c->id, 0);
++}
++
++/* nobody can be waiting on one not made yet: a waiter makes it while holding the
++   mutex, and Lightrec signals with that mutex held */
++int pthread_cond_signal(pthread_cond_t *c) { return c->made ? sysCondSignal(c->id) : 0; }
++int pthread_cond_broadcast(pthread_cond_t *c) { return c->made ? sysCondBroadcast(c->id) : 0; }
+diff --git a/libpcsxcore/lightrec/ps3/pthread.h b/libpcsxcore/lightrec/ps3/pthread.h
+new file mode 100644
+index 00000000..2a15c5e2
+--- /dev/null
++++ b/libpcsxcore/lightrec/ps3/pthread.h
+@@ -0,0 +1,27 @@
++/* The POSIX thread calls Lightrec's threaded compiler uses (recompiler.c, reaper.c),
++ * for the PS3: PSL1GHT's C library declares no threads. Found before the system's
++ * pthread.h only by Lightrec's files (Makefile.libretro, psl1ght). Built on lv2's
++ * PPU threads, mutexes and condition variables (pthread.c). */
++#ifndef PS3_LIGHTREC_PTHREAD_H
++#define PS3_LIGHTREC_PTHREAD_H
++#include <stdint.h>
++
++typedef struct { uint64_t id; } pthread_t;            /* lv2 PPU thread id */
++typedef struct { uint32_t id; } pthread_mutex_t;      /* lv2 mutex */
++/* lv2 ties a condition variable to its mutex when it is created: made at the
++   first wait, with the mutex that wait is given */
++typedef struct { uint32_t id, mutex; volatile int made; } pthread_cond_t;
++typedef int pthread_attr_t, pthread_mutexattr_t, pthread_condattr_t;
++
++int pthread_create(pthread_t *t, const pthread_attr_t *attr, void *(*start)(void *), void *arg);
++int pthread_join(pthread_t t, void **ret);
++int pthread_mutex_init(pthread_mutex_t *m, const pthread_mutexattr_t *attr);
++int pthread_mutex_destroy(pthread_mutex_t *m);
++int pthread_mutex_lock(pthread_mutex_t *m);
++int pthread_mutex_unlock(pthread_mutex_t *m);
++int pthread_cond_init(pthread_cond_t *c, const pthread_condattr_t *attr);
++int pthread_cond_destroy(pthread_cond_t *c);
++int pthread_cond_wait(pthread_cond_t *c, pthread_mutex_t *m);
++int pthread_cond_signal(pthread_cond_t *c);
++int pthread_cond_broadcast(pthread_cond_t *c);
++#endif
+-- 
+2.43.0
+

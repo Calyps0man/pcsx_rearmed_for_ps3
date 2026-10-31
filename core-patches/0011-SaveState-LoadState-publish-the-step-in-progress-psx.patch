@@ -1,0 +1,134 @@
+From cb4e8999947f042d580b4303b7458934412ae5c2 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 22:58:05 +0000
+Subject: [PATCH] SaveState/LoadState: publish the step in progress
+ (psx_state_step)
+
+So a front end can report where a savestate hung.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ libpcsxcore/misc.c | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/libpcsxcore/misc.c b/libpcsxcore/misc.c
+index 1072f04a..5db3dd20 100644
+--- a/libpcsxcore/misc.c
++++ b/libpcsxcore/misc.c
+@@ -46,6 +46,10 @@ char CdromLabel[33] = "";
+ int  CdromFrontendId; // for frontend use
+ 
+ static u32 save_counter;
++
++/* step of SaveState/LoadState in progress, for front ends that report hangs */
++const char *volatile psx_state_step;
++#define STEP(x) (psx_state_step = (x))
+ static char *manuallyLoadedExePath;
+ 
+ // PSX Executable types
+@@ -811,6 +815,7 @@ int SaveState(const char *file) {
+ 	misc->save_counter = ++save_counter;
+ 	memset(misc->reserved, 0, sizeof(misc->reserved));
+ 
++	STEP("save: cpu sync");
+ 	psxCpu->Notify(R3000ACPU_NOTIFY_BEFORE_SAVE, NULL);
+ 
+ 	SaveFuncs.write(f, (void *)PcsxHeader, 32);
+@@ -833,9 +838,12 @@ int SaveState(const char *file) {
+ 	memcpy(u.buf + 3, &oi, sizeof(oi));
+ 	SaveFuncs.write(f, u.buf, sizeof(u.buf));
+ 
++	STEP("save: hle bios");
+ 	if (Config.HLE)
+ 		psxBiosFreeze(1);
+ 
++	STEP("save: memory");
++
+ 	SaveFuncs.write(f, psxRegs.ptrs.psxM, 0x00200000);
+ 	SaveFuncs.write(f, psxRegs.ptrs.psxR, 0x00080000);
+ 	SaveFuncs.write(f, psxRegs.ptrs.psxH, 0x00010000);
+@@ -843,6 +851,7 @@ int SaveState(const char *file) {
+ 	SaveFuncs.write(f, &psxRegs, offsetof(psxRegisters, gteBusyCycle));
+ 
+ 	// gpu
++	STEP("save: gpu");
+ 	u.gpu_hdr.ulFreezeVersion = 1;
+ 	u.gpu_hdr.ulStatus = 0;
+ 	memset(u.gpu_hdr.ulControl, 0, sizeof(u.gpu_hdr.ulControl));
+@@ -851,6 +860,7 @@ int SaveState(const char *file) {
+ 	SaveFuncs.write(f, vram, 1024*512*2);
+ 
+ 	// spu
++	STEP("save: spu");
+ 	SPU_freeze(1, &u.spu_hdr, &spuram, u.spu_part2, psxRegs.cycle);
+ 	assert(u.spu_hdr.Size > sizeof(u.spu_hdr) + 512*1024);
+ 	assert(u.spu_hdr.Size <= sizeof(u.spu_hdr) + 512*1024 + sizeof(u.spu_part2));
+@@ -860,16 +870,22 @@ int SaveState(const char *file) {
+ 	SaveFuncs.write(f, spuram, 512*1024);
+ 	SaveFuncs.write(f, &u.spu_part2, u.spu_hdr.Size - sizeof(u.spu_hdr) - 512*1024);
+ 
++	STEP("save: sio");
+ 	sioFreeze(f, 1);
++	STEP("save: cdrom");
+ 	cdrFreeze(f, 1);
++	STEP("save: hw, counters");
+ 	psxHwFreeze(f, 1);
+ 	psxRcntFreeze(f, 1);
++	STEP("save: mdec");
+ 	mdecFreeze(f, 1);
++	STEP("save: pad");
+ 	ndrc_freeze(f, 1);
+ 	padFreeze(f, 1);
+ 
+ 	memset(misc, 0xff, sizeof(*misc));
+ 	SaveFuncs.close(f);
++	STEP(NULL);
+ 	return 0;
+ }
+ 
+@@ -921,6 +937,7 @@ int LoadState(const char *file) {
+ 	oldhle = Config.HLE;
+ 	Config.HLE = hle;
+ 
++	STEP("load: hle bios");
+ 	if (Config.HLE)
+ 		psxBiosInit();
+ 	else if (oldhle)
+@@ -957,6 +974,7 @@ int LoadState(const char *file) {
+ 		psxBiosFreeze(0);
+ 
+ 	// gpu
++	STEP("load: gpu");
+ 	SaveFuncs.read(f, &u.gpu_hdr, sizeof(u.gpu_hdr));
+ 	GPU_freeze(0, &u.gpu_hdr, &vram);
+ 	assert(vram);
+@@ -964,6 +982,7 @@ int LoadState(const char *file) {
+ 	gpuSyncPluginSR();
+ 
+ 	// spu
++	STEP("load: spu");
+ 	SaveFuncs.read(f, &Size, 4);
+ 	if (sizeof(u.spu_hdr) + 512*1024 < Size &&
+ 	    (uint32_t)Size <= sizeof(u.spu_hdr) + 512*1024u + sizeof(u.spu_part2))
+@@ -981,6 +1000,7 @@ int LoadState(const char *file) {
+ 		SaveFuncs.seek(f, Size, SEEK_CUR);
+ 	}
+ 
++	STEP("load: sio, cdrom, hw, counters, mdec");
+ 	sioFreeze(f, 0);
+ 	cdrFreeze(f, 0);
+ 	psxHwFreeze(f, 0);
+@@ -1001,7 +1021,9 @@ int LoadState(const char *file) {
+ 	if ((oldCP0sr ^ psxRegs.CP0.n.SR) & (1u << 16))
+ 		psxMemOnIsolate((psxRegs.CP0.n.SR >> 16) & 1);
+ 
++	STEP("load: cpu sync");
+ 	psxCpu->Notify(R3000ACPU_NOTIFY_AFTER_LOAD_STATE, NULL);
++	STEP(NULL);
+ 
+ 	result = 0;
+ cleanup:
+-- 
+2.43.0
+

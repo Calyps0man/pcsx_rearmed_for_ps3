@@ -1,0 +1,107 @@
+From 5efb4d0eb6631198287ee9ab92b3eceefbc5e05a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 29 Oct 2026 22:51:23 +0000
+Subject: [PATCH] PS3: core built for the Cell PPU; Lightrec's hang tracking
+ only with the debug log
+
+-mcpu=cell for the psl1ght build (the PPU is in-order, generic ppc64
+scheduling stalls it more). The where/counter tracking of the previous
+debug patch now only runs when psx_debug_trace is set.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ Makefile.libretro                |  2 ++
+ deps/lightrec/lightrec-private.h | 11 ++++++++---
+ deps/lightrec/lightrec.c         | 10 +++++-----
+ 3 files changed, 15 insertions(+), 8 deletions(-)
+
+diff --git a/Makefile.libretro b/Makefile.libretro
+index 0502bca4..e3c80c2d 100644
+--- a/Makefile.libretro
++++ b/Makefile.libretro
+@@ -303,6 +303,8 @@ else ifeq ($(platform), arm64)
+ # Lightweight PS3 Homebrew SDK
+ else ifeq ($(platform), psl1ght)
+ 	TARGET := $(TARGET_NAME)_libretro_psl1ght.a
++	# schedule for the Cell PPU (in-order): plain ppc64 code stalls a lot more there
++	CFLAGS += -mcpu=cell
+ 	CFLAGS += -DBLARGG_BIG_ENDIAN=1 -D__ppc__
+ 	CFLAGS += -I$(PS3DEV)/ppu/include
+ 	CFLAGS += -DNO_DYLIB
+diff --git a/deps/lightrec/lightrec-private.h b/deps/lightrec/lightrec-private.h
+index 98a73098..0c3eb3e2 100644
+--- a/deps/lightrec/lightrec-private.h
++++ b/deps/lightrec/lightrec-private.h
+@@ -225,11 +225,16 @@ enum {
+ 	LR_PRECOMPILE, LR_C_RW, LR_C_RW_GENERIC, LR_C_MFC, LR_C_MTC, LR_C_CP,
+ 	LR_C_MEMSET, LR_C_LOAD_DELAY,
+ };
++/* only with the front end's debug log on (psx_debug_trace, set when a game starts) */
++extern int psx_debug_trace;
+ #define LR_DBG_ENTER(w, p, a) \
+-	u32 lr_dbg_w = lightrec_dbg.where, lr_dbg_p = lightrec_dbg.pc, lr_dbg_a = lightrec_dbg.arg; \
+-	lightrec_dbg.where = (w); lightrec_dbg.pc = (p); lightrec_dbg.arg = (a)
++	u32 lr_dbg_w = 0, lr_dbg_p = 0, lr_dbg_a = 0; \
++	if (psx_debug_trace) { \
++		lr_dbg_w = lightrec_dbg.where; lr_dbg_p = lightrec_dbg.pc; lr_dbg_a = lightrec_dbg.arg; \
++		lightrec_dbg.where = (w); lightrec_dbg.pc = (p); lightrec_dbg.arg = (a); \
++	}
+ #define LR_DBG_LEAVE() \
+-	(lightrec_dbg.where = lr_dbg_w, lightrec_dbg.pc = lr_dbg_p, lightrec_dbg.arg = lr_dbg_a)
++	do { if (psx_debug_trace) { lightrec_dbg.where = lr_dbg_w; lightrec_dbg.pc = lr_dbg_p; lightrec_dbg.arg = lr_dbg_a; } } while (0)
+ 
+ const struct lightrec_mem_map *
+ lightrec_get_map(struct lightrec_state *state, void **host, u32 kaddr);
+diff --git a/deps/lightrec/lightrec.c b/deps/lightrec/lightrec.c
+index 8fbcf5f7..728e96d0 100644
+--- a/deps/lightrec/lightrec.c
++++ b/deps/lightrec/lightrec.c
+@@ -428,7 +428,7 @@ static void lightrec_rw_helper(struct lightrec_state *state,
+ static void lightrec_rw_cb(struct lightrec_state *state, u32 arg)
+ {
+ 	LR_DBG_ENTER(LR_C_RW, state->curr_pc, arg);
+-	lightrec_dbg.n_c++;
++	if (psx_debug_trace) lightrec_dbg.n_c++;
+ 	lightrec_rw_helper(state, (union code) arg, NULL, NULL, 0);
+ 	LR_DBG_LEAVE();
+ }
+@@ -438,7 +438,7 @@ static void lightrec_rw_generic_cb_(struct lightrec_state *state, u32 arg);
+ static void lightrec_rw_generic_cb(struct lightrec_state *state, u32 arg)
+ {
+ 	LR_DBG_ENTER(LR_C_RW_GENERIC, state->curr_pc, arg);
+-	lightrec_dbg.n_c++;
++	if (psx_debug_trace) lightrec_dbg.n_c++;
+ 	lightrec_rw_generic_cb_(state, arg);
+ 	LR_DBG_LEAVE();
+ }
+@@ -557,7 +557,7 @@ u32 lightrec_mfc(struct lightrec_state *state, union code op)
+ static void lightrec_mfc_cb(struct lightrec_state *state, union code op)
+ {
+ 	LR_DBG_ENTER(LR_C_MFC, state->curr_pc, op.opcode);
+-	lightrec_dbg.n_c++;
++	if (psx_debug_trace) lightrec_dbg.n_c++;
+ 	u32 rt = lightrec_mfc(state, op);
+ 
+ 	if (op.i.op == OP_SWC2)
+@@ -690,7 +690,7 @@ void lightrec_mtc(struct lightrec_state *state, union code op, u8 reg, u32 data)
+ static void lightrec_mtc_cb(struct lightrec_state *state, u32 arg)
+ {
+ 	LR_DBG_ENTER(LR_C_MTC, state->curr_pc, arg);
+-	lightrec_dbg.n_c++;
++	if (psx_debug_trace) lightrec_dbg.n_c++;
+ 	union code op = (union code) arg;
+ 	u32 data;
+ 	u8 reg;
+@@ -734,7 +734,7 @@ void lightrec_cp(struct lightrec_state *state, union code op)
+ static void lightrec_cp_cb(struct lightrec_state *state, u32 arg)
+ {
+ 	LR_DBG_ENTER(LR_C_CP, state->curr_pc, arg);
+-	lightrec_dbg.n_c++;
++	if (psx_debug_trace) lightrec_dbg.n_c++;
+ 	lightrec_cp(state, (union code) arg);
+ 	LR_DBG_LEAVE();
+ }
+-- 
+2.43.0
+

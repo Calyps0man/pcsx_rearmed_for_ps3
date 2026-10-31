@@ -1,0 +1,106 @@
+From 25938d04b0566bc4c4ece0bac26dcaf663657b89 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 29 Oct 2026 11:40:42 +0000
+Subject: [PATCH] lightrec: when the code buffer is full, free all other blocks
+ instead of failing
+
+lightrec_remove_outdated_blocks() frees only blocks that are outdated or
+'old', and the age test compares against a cycle counter that the plugin
+resets at every exit, so it almost never matches. Once the 8 MiB buffer
+filled up (after loading a level in Terracon), compiling the next block
+failed every time and the emulation looped forever on the same PC.
+
+Now the compiler frees every other block when the retry still fails (no
+block code runs while a block is compiled) and counts how often that
+happens; the debug state line shows the count.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ deps/lightrec/blockcache.c |  6 ++++++
+ deps/lightrec/blockcache.h |  2 ++
+ deps/lightrec/lightrec.c   | 15 +++++++++++++++
+ libpcsxcore/misc.c         |  4 +++-
+ 4 files changed, 26 insertions(+), 1 deletion(-)
+
+diff --git a/deps/lightrec/blockcache.c b/deps/lightrec/blockcache.c
+index ecfe80e8..f1fb149a 100644
+--- a/deps/lightrec/blockcache.c
++++ b/deps/lightrec/blockcache.c
+@@ -159,6 +159,12 @@ void lightrec_remove_outdated_blocks(struct blockcache *cache,
+ 	lightrec_free_blocks(cache, except, false);
+ }
+ 
++void lightrec_free_all_blocks_except(struct blockcache *cache,
++				     const struct block *except)
++{
++	lightrec_free_blocks(cache, except, true);
++}
++
+ void lightrec_free_all_blocks(struct blockcache *cache)
+ {
+ 	lightrec_free_blocks(cache, NULL, true);
+diff --git a/deps/lightrec/blockcache.h b/deps/lightrec/blockcache.h
+index 3859fb8e..17514a11 100644
+--- a/deps/lightrec/blockcache.h
++++ b/deps/lightrec/blockcache.h
+@@ -22,6 +22,8 @@ struct blockcache * lightrec_blockcache_init(struct lightrec_state *state);
+ void lightrec_free_block_cache(struct blockcache *cache);
+ 
+ void lightrec_free_all_blocks(struct blockcache *cache);
++void lightrec_free_all_blocks_except(struct blockcache *cache,
++				     const struct block *except);
+ 
+ u32 lightrec_calculate_block_hash(const struct block *block);
+ _Bool lightrec_block_is_outdated(struct lightrec_state *state, struct block *block);
+diff --git a/deps/lightrec/lightrec.c b/deps/lightrec/lightrec.c
+index 030ad34a..c034b48a 100644
+--- a/deps/lightrec/lightrec.c
++++ b/deps/lightrec/lightrec.c
+@@ -863,6 +863,8 @@ static void lightrec_free_code(struct lightrec_state *state, void *ptr)
+ 
+ static char lightning_code_data[0x80000];
+ 
++unsigned int lightrec_code_flushes;
++
+ static void * lightrec_emit_code(struct lightrec_state *state,
+ 				 const struct block *block,
+ 				 jit_state_t *_jit, unsigned int *size)
+@@ -904,6 +906,19 @@ static void * lightrec_emit_code(struct lightrec_state *state,
+ 			pr_debug("Re-try to alloc %zu bytes...\n", code_size);
+ 
+ 			code = lightrec_alloc_code(state, code_size);
++			if (!code) {
++				/* The code buffer is full of blocks that are
++				 * still valid (lightrec_block_is_old() rarely
++				 * matches, as the cycle counter is reset at
++				 * every exit). Free all the other blocks: no
++				 * block code is running while a block gets
++				 * compiled, they will be compiled again when
++				 * needed. Without this, the compiler failed
++				 * here for good and the emulation froze. */
++				lightrec_free_all_blocks_except(state->block_cache, block);
++				lightrec_code_flushes++;
++				code = lightrec_alloc_code(state, code_size);
++			}
+ 			if (!code) {
+ 				pr_err("Could not alloc even after removing old blocks!\n");
+ 				return NULL;
+diff --git a/libpcsxcore/misc.c b/libpcsxcore/misc.c
+index 0487932d..2a154ded 100644
+--- a/libpcsxcore/misc.c
++++ b/libpcsxcore/misc.c
+@@ -141,7 +141,9 @@ void psx_debug_state(char *b, int n)
+ 	if (psxCpu != &psxInt && psx_debug_trace && k > 0 && k < n) {
+ 		u32 tpc, tcount;
+ 		lightrec_plugin_debug_trace(&tpc, &tcount);
+-		snprintf(b + k, n - k, "; dynarec: last block %08x, %u block entries", tpc, tcount);
++		extern unsigned int lightrec_code_flushes;
++		snprintf(b + k, n - k, "; dynarec: last block %08x, %u block entries, code buffer full %u times",
++			 tpc, tcount, lightrec_code_flushes);
+ 	}
+ #endif
+ }
+-- 
+2.43.0
+

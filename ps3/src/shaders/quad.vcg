@@ -1,0 +1,16 @@
+/* full-screen quads: position in clip space, texture coordinate, the size of one
+   source texel, and (for FXAA) the four corner sample positions half a texel away,
+   so the fragment program spends no instructions on them. native: PS1 pixel
+   position of the texture coordinate (the dithering programs) */
+void main(float2 pos : POSITION, float2 uv : TEXCOORD0, float2 texel : TEXCOORD1, float2 native : TEXCOORD2,
+          out float4 oPos : POSITION, out float2 oUv : TEXCOORD0, out float2 oTexel : TEXCOORD1,
+          out float4 oNwNe : TEXCOORD2, out float4 oSwSe : TEXCOORD3, out float2 oNative : TEXCOORD4)
+{
+    float2 h = 0.5f * texel;
+    oPos = float4(pos, 0.0f, 1.0f);
+    oUv = uv;
+    oTexel = texel;
+    oNwNe = float4(uv.x - h.x, uv.y - h.y, uv.x + h.x, uv.y - h.y);
+    oSwSe = float4(uv.x - h.x, uv.y + h.y, uv.x + h.x, uv.y + h.y);
+    oNative = native;
+}

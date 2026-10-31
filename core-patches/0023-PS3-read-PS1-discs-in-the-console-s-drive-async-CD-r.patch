@@ -1,0 +1,35 @@
+From 559359a0d2b47660423c38b5f1ea2b2bae0604e3 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 06:59:29 +0000
+Subject: [PATCH] PS3: read PS1 discs in the console's drive (async CD reader
+ with the front end's rcdrom_*)
+
+The psl1ght build turns on USE_ASYNC_CDROM and HAVE_CDROM for cdrom-async.c
+and libretro.c; the rcdrom_* functions come from the front end (lv2 storage
+calls). Games from files keep the old direct reads (read-ahead 0).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ Makefile.libretro | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/Makefile.libretro b/Makefile.libretro
+index e3c80c2d..85d82942 100644
+--- a/Makefile.libretro
++++ b/Makefile.libretro
+@@ -315,7 +315,10 @@ else ifeq ($(platform), psl1ght)
+ 	LIBDL :=
+ 	NEED_SYSCONF := 1
+ 	HAVE_PHYSICAL_CDROM = 0
+-	USE_ASYNC_CDROM = 0
++	# the disc in the PS3's drive: the front end has the rcdrom_* reader (lv2
++	# storage calls); the read-ahead thread comes with USE_ASYNC_CDROM
++	USE_ASYNC_CDROM = 1
++  libpcsxcore/cdrom-async.o frontend/libretro.o: CFLAGS += -DHAVE_CDROM
+ 	USE_ASYNC_GPU = 1
+ 	# pcsxr-threads.c has its own lv2 thread code
+ 	NO_FEATURES_CPU = 1
+-- 
+2.43.0
+

@@ -1,0 +1,48 @@
+From 2d03b113059785bb0a4697d11afccc5d539b879b Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 10:58:19 +0000
+Subject: [PATCH 7/7] gpulib: gpulib_pending_write() for front-ends that keep
+ their own VRAM copy
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ plugins/gpulib/gpu.c       | 8 ++++++++
+ plugins/gpulib/gpu_hooks.h | 3 +++
+ 2 files changed, 11 insertions(+)
+
+diff --git a/plugins/gpulib/gpu.c b/plugins/gpulib/gpu.c
+index 66e65b28..048f4adc 100644
+--- a/plugins/gpulib/gpu.c
++++ b/plugins/gpulib/gpu.c
+@@ -1326,5 +1326,13 @@ void SysPrintf(const char *fmt, ...)
+ // vim:shiftwidth=2:expandtab
+ 
+ struct gpu_frontend_hooks gpu_frontend_hooks;
++int gpulib_pending_write(int *x, int *y, int *w, int *h)
++{
++  if (!gpu.dma.h || gpu.dma_start.is_read)
++    return 0;
++  *x = gpu.dma_start.x; *y = gpu.dma_start.y; *w = gpu.dma_start.w; *h = gpu.dma_start.h;
++  return 1;
++}
++
+ const uint16_t *gpulib_get_vram(void) { return gpu.vram; }
+ const uint32_t *gpulib_get_ex_regs(void) { return gpu.ex_regs; }
+diff --git a/plugins/gpulib/gpu_hooks.h b/plugins/gpulib/gpu_hooks.h
+index 48e87678..b750649f 100644
+--- a/plugins/gpulib/gpu_hooks.h
++++ b/plugins/gpulib/gpu_hooks.h
+@@ -34,6 +34,9 @@ const uint32_t *gpulib_get_ex_regs(void);
+  * without USE_ASYNC_GPU. Off while front-end hooks are installed: they are
+  * called from wherever the renderer runs. */
+ void gpulib_set_thread_rendering(int on);
++/* a CPU->VRAM transfer is in progress (it may span several frames): its rect
++ * already holds newer data in the core's VRAM than a front-end copy has */
++int gpulib_pending_write(int *x, int *y, int *w, int *h);
+ 
+ /* time spent on the emulation thread, in timebase ticks (PowerPC only):
+  * [0] GPU command processing and frame output (incl. waits for the GPU thread),
+-- 
+2.43.0
+

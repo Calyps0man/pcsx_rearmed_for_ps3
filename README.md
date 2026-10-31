@@ -1,22 +1,346 @@
-PCSX-ReARMed - yet another PCSX fork
-====================================
+# PCSX-ReARMed for PS3
 
-![CI (Linux)](https://github.com/notaz/pcsx_rearmed/workflows/CI%20(Linux)/badge.svg)
+A PlayStation 1 emulator for the PlayStation 3. Version 0.1 (build 72).
 
-PCSX ReARMed is yet another PCSX fork based on the PCSX-Reloaded project,
-which itself contains code from PCSX, PCSX-df and PCSX-Revolution. This
-version was originally ARM architecture oriented (hence the name) with
-its MIPS->ARM dynamic recompilation and assembly optimizations, but more
-recently it targets other architectures too. A fork of this emulator was
-used in [PS Classic](https://en.wikipedia.org/wiki/PlayStation_Classic)
-(without any coordination or even notification).
+It is the [PCSX-ReARMed](https://github.com/libretro/pcsx_rearmed) libretro core with
+its own PSL1GHT front end, built around the PS3's hardware:
+
+- **Lightrec dynarec** tuned for the Cell PPU (no microcoded instructions in the
+  generated code).
+- **RSX renderer**: 3D at 2x, 3x, 4x or 4.5x resolution, with the PS1's VRAM kept
+  on the GPU.
+- **SPU jobs**: FMV decoding and edge smoothing run on the Cell's SPUs.
+- **PS1 discs** play straight from the console's drive (custom firmware).
+
+## Contents
+
+- [Features](#features)
+- [Requirements](#requirements)
+- [Installing](#installing)
+- [Games and BIOS](#games-and-bios)
+- [Playing a PS1 disc](#playing-a-ps1-disc)
+- [Controls](#controls)
+- [Settings](#settings)
+- [Per-game settings](#per-game-settings)
+- [Performance tips](#performance-tips)
+- [Files](#files)
+- [Reporting a problem](#reporting-a-problem)
+- [How it works](#how-it-works)
+- [Building](#building)
+- [Tests](#tests)
+- [Credits and licence](#credits-and-licence)
 
 ## Features
-* ARM/ARM64 dynamic recompiler by Ari64
-* [lightrec](https://github.com/pcercuei/lightrec/) dynamic recompiler for other architectures
-* NEON GPU by Exophase for ARM NEON and x86 SSE2+
-* PCSX4ALL GPU by Una-i/senquack for other architectures
-* heavily modified P.E.Op.S. SPU
-* BIOS HLE emulation (most games run without proprietary BIOS)
-* libretro support
 
+- Disc images (.cue/.bin, .chd, .pbp, .iso, .m3u) from the HDD or USB, and PS1 discs
+  in the console's drive, listed with the game's name and a disc icon.
+- Copy disc to HDD: copies a PS1 disc to a .bin/.cue named after the game, so it
+  loads without drive pauses.
+- RSX hardware renderer at up to 4.5x (4096x2304). It draws everything the PS1 GPU
+  does, including semi-transparency, texture windows, the mask bit and dithering.
+- High-resolution menus (480-line pictures) are drawn only as large as the TV can
+  show, so they stay fast at 4x.
+- Picture filters: sharp, bilinear, FXAA on the RSX, or edge smoothing on the SPUs.
+- 10 save-state slots per game, with the time each was saved.
+- Per-game settings, kept in their own file.
+- Skip intro videos: presses Start/X during a game's opening videos, and
+  fast-forwards the ones that can't be skipped.
+- Sound that slows down with the game instead of crackling (or keeps its pitch).
+- PS1 CPU overclock (+50% / +75%) for games that slowed down on a real PS1.
+- Debug tools: VRAM check against the software renderer, numbered VRAM dumps with a
+  GP0 trace, and hang reports.
+
+## Requirements
+
+- A PS3 on **custom firmware** (tested on a CECHA00).
+- Optional: a PS1 BIOS (see below). Without one, the built-in HLE BIOS is used.
+
+**HEN** is untested. The EBOOT is signed as an NPDRM app with a free licence, which
+HEN accepts, but the dynarec writes its code into the app's own code area. That
+works on CFW. If a game crashes as it starts on HEN, set **CPU** to
+**Interpreter** (slower).
+
+## Installing
+
+Install `pcsx-rearmed-ps3-full64.pkg` with **Package Manager → Install Package
+Files**. The app appears as **PCSX-ReARMed for PS3** (title ID `PCSR00001`); its folder
+is `/dev_hdd0/game/PCSR00001/USRDIR`.
+
+Installing a new version over an old one keeps your saves, states and settings.
+
+## Games and BIOS
+
+Put games in any of these folders:
+
+| Where | Folders |
+|---|---|
+| App folder | `/dev_hdd0/game/PCSR00001/USRDIR/roms` |
+| HDD | `/dev_hdd0/PSXISO`, `/dev_hdd0/ROMS/PSX`, `/dev_hdd0/ROMS/PS1`, `/dev_hdd0/roms/psx` |
+| USB | `/dev_usb000/` or `/dev_usb001/` + `PSXISO`, `ROMS/PSX` or `roms/psx` |
+
+Formats: `.cue`/`.bin`, `.chd`, `.pbp`, `.iso`, `.m3u` (multi-disc games).
+
+A BIOS improves compatibility. Put `scph5501.bin` (or `scph5500`, `scph5502`,
+`scph101`, `scph7001`, `scph1001`, `psxonpsp660`) in `USRDIR/system`. Any other
+512 KB BIOS file there is used too. With a BIOS, **PS1 logo at start** in the
+settings shows the PlayStation logo when a game starts.
+
+## Playing a PS1 disc
+
+Insert the disc. The first entry of the game list is the drive. It is checked when
+the list opens (Square checks again), and it shows the game's name with a black
+disc icon and "from disc" at the right. Press X to play.
+
+Reading PS1 discs needs raw CD access, which retail firmware blocks. On CFW the
+emulator unlocks it for the session with temporary LV1/LV2 patches (the same
+method as IRISMAN), then restores the original values. On HEN this is not
+possible (HEN gives no LV1 access): playing from the disc and copying it need CFW,
+and the app says so. On HEN, copy the disc to an image on a PC instead.
+
+- Every patch site is checked before anything is written. Unknown kernels are
+  left alone.
+- The patches are applied only for CD-sized discs.
+- Supported kernel layouts: retail 4.75 and later, and DEX 4.81 and later.
+
+Game names come from a list of 10,306 PS1 serials (`ps3/data/ps1titles.txt`).
+
+### Copy disc to HDD
+
+The console's drive pauses the game whenever it has to seek, for example when a
+game loads from another part of the disc. To avoid that, select the disc entry
+and press **Circle (copy to HDD)**:
+
+- The whole disc is copied to `/dev_hdd0/PSXISO/<game name>.bin` and `.cue`,
+  named after the game, and appears in the game list as a disc image.
+- A progress bar shows the time left. Press Circle twice to stop; an unfinished copy
+  is removed.
+- The copy needs up to 700 MB of free space, which is checked first. A disc that
+  is already on the HDD isn't copied again.
+- Subchannel data isn't copied, as when playing the disc itself, so
+  LibCrypt-protected PAL games need an `.sbi` file next to the copy.
+
+## Controls
+
+| Where | Buttons |
+|---|---|
+| Game list | X play · Triangle settings · Square check the drive again · L1/R1 page · Circle copy the disc to the HDD (disc entry) |
+| In game | **Select + Start** opens the menu |
+| In game | **L3 + R3** toggles the DualShock's analog mode |
+
+The in-game menu has these entries:
+
+- Resume
+- Save state / Load state (Left/Right picks one of 10 slots)
+- Reset
+- Settings
+- Own settings for this game
+- Quit to game list
+- Dump VRAM (debug)
+
+## Settings
+
+| Setting | Values (default first) | Notes |
+|---|---|---|
+| CPU | Dynarec, 2 threads, **Dynarec, 1 thread**, Interpreter | 2 threads (experimental, can freeze some games): new game code is translated on the PPU's second thread while the game goes on more slowly. Interpreter only for games that misbehave. |
+| Renderer | **RSX 2x**, 3x, 4x, 4.5x, Software (native), RSX 1x (native, drawn by the RSX) | In game, it shows the resolution actually drawn. |
+| Picture filter | **Smoothing on SPUs**, Sharp (nearest), Smooth (bilinear), FXAA (RSX) | |
+| Aspect ratio | **4:3**, 14:9, Zoom 14:9, Zoom 16:9, Stretch to screen | Zoom crops the top and bottom. |
+| Screen size | **100% x 100%** | Shrink or stretch the picture to fit your TV. |
+| Frame skip | **Auto**, Off | Software renderer only. |
+| Dithering | **Off**, On | |
+| Show FPS | **On**, Off | Game frame rate and emulation speed. |
+| GPU thread | **On**, Off | Software renderer on the PPU's second thread. |
+| Left stick as D-pad | **On**, Off | |
+| Right stick as buttons | **Off**, On | Triangle/X/Square/Circle. |
+| Vibration | **On**, Off | DualShock 3 vibration in games that use it. |
+| FMV decoding | **SPUs**, PPU | |
+| PS1 CPU speed | **Normal**, +50%, +75% | Some games may glitch. |
+| Sound when slow | **Slow down**, Keep pitch | |
+| Skip intro videos | **Off**, On | Videos in a game's first 3 minutes. |
+| PAL games at 60 Hz | **Off**, On | Applies from the next game start. |
+| PS1 logo at start | **Off**, On | Needs a BIOS in `USRDIR/system`. |
+| Speed limit | **Normal**, Strict, Off | Normal catches up after a hitch; Strict never goes above 100%. |
+| VRAM check (debug) | **Off**, On | The software renderer draws too, for comparison. |
+| Debug log | **Off**, On | Writes the log files and hang reports. |
+
+Settings for all games are saved in `USRDIR/settings.txt`.
+
+## Per-game settings
+
+In game, open the menu and choose **Own settings for this game**. From then on,
+setting changes made in that game apply to it only. They are saved in
+`USRDIR/configs/<game>.ini`, named after the game file (or the disc's label). The
+game list marks such games with "own settings".
+
+Choosing the entry again removes them, and the settings for all games apply again.
+Screen size is always shared by all games.
+
+## Performance tips
+
+- **RSX 3x** is the sweet spot: most games run at full speed with any filter.
+- **4x and 4.5x** depend on the game. Heavy scenes, such as Silent Hill's fog, can
+  be more than the RSX can draw at 60 fps.
+- The filter only costs RSX time. FXAA costs the most. Smoothing on SPUs leaves the
+  RSX free; Sharp and Smooth cost almost nothing.
+- Give a demanding game a lower resolution in its own settings, and keep 4x for the
+  rest.
+- If a game itself runs slowly (low game FPS at 100% speed), try **PS1 CPU speed
+  +50%** in its own settings.
+- Games on the disc can pause briefly while the console's drive seeks. Disc images
+  on the HDD read ahead and don't: use **Copy disc to HDD** for those games.
+
+## Files
+
+All paths are inside `/dev_hdd0/game/PCSR00001/USRDIR`.
+
+| What | Where |
+|---|---|
+| Settings | `settings.txt`, `configs/<game>.ini` |
+| Save states | `states/` |
+| Memory cards (one per game) | `saves/<serial>_1.mcd` |
+| BIOS | `system/` |
+| Logs (only with Debug log on) | `log.txt` (app and menus) and `logs/<game>.txt`, replaced on each run |
+| VRAM dumps, hang dumps | `dumps/` |
+
+## Reporting a problem
+
+1. Turn on **Debug log** (Settings, or the game's own settings).
+2. Reproduce the problem.
+3. Send `logs/<game>.txt`.
+
+For a drawing problem, also turn on **VRAM check**, go to the wrong-looking scene,
+and choose **Dump VRAM** in the in-game menu. Each dump is numbered (no dump
+overwrites another) and writes these files to `dumps/`:
+
+- the RSX picture
+- the software renderer's picture
+- a difference picture
+- a GP0 trace of the next frame
+
+## How it works
+
+### RSX renderer
+
+With RSX 1x–4.5x, the RSX draws every polygon, line, sprite and fill twice:
+
+- once at the chosen scale for the screen;
+- once at native resolution into a copy of the PS1's VRAM, which textures are read
+  from.
+
+The core's own VRAM is synced only for the rectangles it touches (uploads, copies,
+reads, save states). Further details:
+
+- Texture coordinates are clamped to each primitive's range, so upscaled edges
+  don't pick up neighbouring texels.
+- Polygons follow the PS1's pixel coverage and colour rounding in the native pass.
+- The mask bit (bit 15: set mask, check mask) is kept in the native VRAM. Once a
+  game uses the mask check, both passes also keep it in the stencil buffer, so
+  there's no stall per primitive.
+- A self-test at start-up checks the RSX's surface and texture layout and which
+  bit-15 method works on the console. If it fails, the log says why and the hybrid
+  renderer is used instead.
+- 24-bit (FMV) frames are shown from the core's VRAM.
+
+### SPUs
+
+Five SPU threads take two kinds of jobs:
+
+- **FMV decoding**: the SPUs decode videos ahead with the core's own routines. The
+  output is identical, checked at start-up.
+- **Smoothing on SPUs**: the RSX scales each frame to the screen into main memory,
+  the SPUs smooth its edges, and the RSX only copies the result.
+
+### Changes to the core
+
+This repository is PCSX-ReARMed (notaz/pcsx_rearmed, branch `libretro`) with the PS3
+changes on branch `ps3`; the PS3 front end is in `ps3/`. The core changes are also
+in `core-patches/` (0001–0036) for applying to upstream:
+
+- Lightrec on the PS3 (64-bit ELFv1 PowerPC): function descriptors, real cache
+  flushing, the code buffer in `.text`.
+- No Cell-microcoded instructions in Lightrec's code (each costs about 11 cycles on
+  the Cell PPU); the core is built with `-mcpu=cell`.
+- gpulib hooks that let the front end draw with the RSX instead of the software
+  renderer.
+- MDEC decoding routines shared with the SPU program.
+- Lightrec: a full code buffer frees the other blocks instead of stopping, and
+  accesses to unmapped memory no longer stop emulation.
+- A GTE fix (matrix-vector helpers read the wrong registers) and a 15-bit colour
+  conversion fix for big-endian.
+- Reading PS1 discs in the console's drive, with asynchronous CD read-ahead.
+- Lightrec's threaded compiler on the PPU's second hardware thread (lv2 threads),
+  switched on or off at run time by the CPU setting, with fixes for its queue
+  and code table.
+- A faster memory allocator for GNU Lightning.
+- Hang reports and dumps for the debug log.
+
+Translating PS1 code is slow on the Cell: about 0.3 to 2 ms per block. A game that
+loads a lot of new code at once (a race start in GT2) stutters while it is
+translated, with 1 or 2 threads alike. With **Dynarec, 2 threads**, Lightrec
+translates on the PPU's second hardware thread while the code runs in its
+interpreter, but the two threads share one core.
+
+Translated code stays as long as the game runs: when the same code is loaded again
+(GT2's race code after the menus), Lightrec finds it unchanged and does not
+translate it again, so only the first race after loading the game stutters.
+
+The picture uses three display buffers. The next frame is drawn into the free
+one, so the CPU no longer waits for the TV's refresh before drawing.
+
+The front end runs the emulator on a 2 MiB thread: the PS3's main thread has only
+64 KiB of stack, which Lightrec's interpreter overflowed in some games.
+
+## Building
+
+You need:
+
+- the PS3 toolchain and PSL1GHT (https://github.com/ps3dev/ps3toolchain);
+- `python3`;
+- NVIDIA's Cg toolkit for `cgcomp` (Ubuntu: `nvidia-cg-toolkit`).
+
+PSL1GHT needs `psl1ght-patches/0001-rsx-context-callback-clobbers.patch`. Its
+command-buffer callback is inline assembly that doesn't declare what it changes;
+with GCC 11 or later, the GPU hangs after about 1,000 frames. Apply the patch, then
+rebuild and install `ppu/librsx`. `build.sh` refuses to build without it.
+
+```sh
+PS3DEV=/usr/local/ps3dev ps3/build.sh [name]   # -> ps3/build/<name>.pkg
+```
+
+`ps3/build.sh` builds the core from this repository (the folder above `ps3/`), which
+already has the changes. `DYNAREC=0 ps3/build.sh` builds an interpreter-only package.
+
+## Tests
+
+```sh
+hosttest/fetch_testdata.sh   # PS1 test programs by krom (PeterLemon/PSX)
+hosttest/build.sh            # needs gcc-powerpc64-linux-gnu qemu-user nvidia-cg-toolkit libosmesa6-dev
+cd hosttest && ./runall.sh runner_lr_ppc64 out_lr 180 pcsx_rearmed_drc=enabled
+cd hosttest && ./hwr_full_all.sh     # RSX renderer, native build with a Mesa backend
+```
+
+- **CPU and GTE:** the core runs big-endian under `qemu-ppc64`, in the same byte
+  order as the PS3. All CPU/GTE instruction tests pass with the interpreter and
+  with the dynarec. The 72 test programs give the same frames with both (one
+  differs only in timing).
+- **RSX renderer:** an OpenGL model of the backend, using the same shaders,
+  replays test programs and GP0 traces from real games (`hosttest/gp0replay`).
+  Its output matches the software renderer apart from edge pixels.
+- **Disc reader:** `hosttest/disc` checks the reader, its patch transaction and
+  the disc copy against simulated drives and kernels.
+
+QEMU can't check instruction-cache behaviour, RSX timing or performance on a real
+console; those were tested on the PS3.
+
+## Credits and licence
+
+- PCSX-ReARMed (notaz and contributors), PCSX/PCSX-Reloaded, P.E.Op.S. GPU
+  (dfxvideo), dfsound, Lightrec and GNU Lightning, libchdr, libretro-common.
+- Menu font: DejaVu Sans Mono (Bitstream Vera licence).
+- Disc reading (playing and copying PS1 discs from the drive): added by another AI
+  agent, following IRISMAN's method.
+- PS1 game titles (`ps3/data/ps1titles.txt`, made by `ps3/tools/make_titles.py`):
+  [libretro-database](https://github.com/libretro/libretro-database), CC BY-SA 4.0.
+
+Licensed under the GPL v2 or later; see `COPYING`. The original PCSX-ReARMed README
+is in [README.upstream.md](README.upstream.md).

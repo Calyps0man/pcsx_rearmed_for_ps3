@@ -1,0 +1,108 @@
+From 517684311fedbbd93643e7707b28a1f71026634a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 29 Oct 2026 10:53:11 +0000
+Subject: [PATCH] lightrec: without the memory map, keep stores through bad
+ pointers inside the emulated memory (they corrupted the emulator on the PS3)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ deps/lightrec/emitter.c | 46 ++++++++++++++++++++++++++++++++++++-----
+ libpcsxcore/misc.c      |  8 +++++++
+ 2 files changed, 49 insertions(+), 5 deletions(-)
+
+diff --git a/deps/lightrec/emitter.c b/deps/lightrec/emitter.c
+index 9ad71048..81517832 100644
+--- a/deps/lightrec/emitter.c
++++ b/deps/lightrec/emitter.c
+@@ -1455,6 +1455,23 @@ static void rec_store_io(struct lightrec_cstate *cstate,
+ 				rec_io_mask(cstate->state), false);
+ }
+ 
++/* Without the memory map (no mmap, e.g. the PS3), the code below writes to host
++ * memory computed from the PS1 address: a store through a bad pointer (to an
++ * address the PS1 has no memory at, which the interpreter just ignores) wrote
++ * outside the emulated memory and corrupted the emulator (Terracon froze).
++ * Stores that are not to RAM must stay inside the 64 KiB around the scratchpad
++ * (scratchpad and I/O): others go to the unused 0x1f800400-0x1f8007ff. */
++static void clamp_scratch_store(jit_state_t *_jit, u8 addr, u8 tmp)
++{
++	jit_node_t *ok;
++
++	jit_rshi_u(tmp, addr, 16);
++	ok = jit_beqi(tmp, 0x1f80);
++	jit_andi(addr, addr, 0x3ff);
++	jit_ori(addr, addr, 0x1f800400);
++	jit_patch(ok);
++}
++
+ static void rec_store_direct_no_invalidate(struct lightrec_cstate *cstate,
+ 					   const struct block *block,
+ 					   u16 offset, jit_code_t code,
+@@ -1493,13 +1510,29 @@ static void rec_store_direct_no_invalidate(struct lightrec_cstate *cstate,
+ 
+ 		to_not_ram = jit_bmsi(tmp, BIT(28));
+ 
+-		jit_movi(tmp2, state->offset_ram);
++		if (!state->mirrors_mapped) {
++			/* RAM: a bad pointer above 2 MiB goes to the junk area too */
++			jit_node_t *in_ram = jit_blti_u(tmp, RAM_SIZE);
++			jit_movi(tmp, 0x1f800400);
++			jit_movi(tmp2, state->offset_scratch);
++			to_end = jit_b();
++			jit_patch(in_ram);
++			jit_movi(tmp2, state->offset_ram);
++			jit_node_t *to_end_ram = jit_b();
++			jit_patch(to_not_ram);
++			clamp_scratch_store(_jit, tmp, tmp2);
++			jit_movi(tmp2, state->offset_scratch);
++			jit_patch(to_end);
++			jit_patch(to_end_ram);
++		} else {
++			jit_movi(tmp2, state->offset_ram);
+ 
+-		to_end = jit_b();
+-		jit_patch(to_not_ram);
++			to_end = jit_b();
++			jit_patch(to_not_ram);
+ 
+-		jit_movi(tmp2, state->offset_scratch);
+-		jit_patch(to_end);
++			jit_movi(tmp2, state->offset_scratch);
++			jit_patch(to_end);
++		}
+ 	} else if (state->offset_ram) {
+ 		tmp2 = lightrec_alloc_reg_temp_with_value(reg_cache, _jit,
+ 							  state->offset_ram);
+@@ -1613,6 +1646,9 @@ static void rec_store_direct(struct lightrec_cstate *cstate, const struct block
+ 
+ 		to_end = jit_b();
+ 		jit_patch(to_not_ram);
++
++		if (!state->mirrors_mapped)
++			clamp_scratch_store(_jit, tmp2, tmp);
+ 	}
+ 
+ 	if (state->offset_ram || state->offset_scratch)
+diff --git a/libpcsxcore/misc.c b/libpcsxcore/misc.c
+index c268fa39..0487932d 100644
+--- a/libpcsxcore/misc.c
++++ b/libpcsxcore/misc.c
+@@ -130,6 +130,14 @@ void psx_debug_state(char *b, int n)
+ 	if (k > 0 && k < n)
+ 		k += cdrDebugState(b + k, n - k);
+ #ifdef LIGHTREC
++	if (psxCpu != &psxInt && k > 0 && k < n) {
++		/* the dynarec sends stores through bad pointers to the unused
++		   0x1f800400-0x1f8007ff (no memory map on this host): seen any? */
++		const u32 *junk = (const u32 *)(psxRegs.ptrs.psxH + 0x400);
++		int any = 0, j;
++		for (j = 0; j < 0x100; j++) any |= junk[j] != 0;
++		k += snprintf(b + k, n - k, "; bad-pointer stores %s", any ? "SEEN" : "none");
++	}
+ 	if (psxCpu != &psxInt && psx_debug_trace && k > 0 && k < n) {
+ 		u32 tpc, tcount;
+ 		lightrec_plugin_debug_trace(&tpc, &tcount);
+-- 
+2.43.0
+

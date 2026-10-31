@@ -1,0 +1,173 @@
+From 78c169767e528391348d95f6c0f1836ecda6ab96 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 29 Oct 2026 09:48:46 +0000
+Subject: [PATCH] Debug trace: Lightrec blocks record their PC and count
+ entries when psx_debug_trace is set; reported in psx_debug_state, last
+ block's code in the hang dump (version 2)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ deps/lightrec/lightrec-private.h |  1 +
+ deps/lightrec/lightrec.c         | 21 +++++++++++++++++++++
+ deps/lightrec/lightrec.h         |  3 +++
+ libpcsxcore/lightrec/plugin.c    |  7 +++++++
+ libpcsxcore/misc.c               | 32 +++++++++++++++++++++++++-------
+ 5 files changed, 57 insertions(+), 7 deletions(-)
+
+diff --git a/deps/lightrec/lightrec-private.h b/deps/lightrec/lightrec-private.h
+index 7d814927..7a5608d7 100644
+--- a/deps/lightrec/lightrec-private.h
++++ b/deps/lightrec/lightrec-private.h
+@@ -199,6 +199,7 @@ struct lightrec_state {
+ 	u32 opt_flags;
+ 	_Bool with_32bit_lut;
+ 	_Bool mirrors_mapped;
++	u32 trace_pc, trace_count;	/* debugging: last block entered, entries */
+ 	void *code_lut[];
+ };
+ 
+diff --git a/deps/lightrec/lightrec.c b/deps/lightrec/lightrec.c
+index 6e705913..030ad34a 100644
+--- a/deps/lightrec/lightrec.c
++++ b/deps/lightrec/lightrec.c
+@@ -29,6 +29,8 @@
+ #include <stddef.h>
+ #include <string.h>
+ 
++extern int psx_debug_trace;	/* libpcsxcore/misc.c: front end debug log */
++
+ static struct block * lightrec_precompile_block(struct lightrec_state *state,
+ 						u32 pc);
+ static bool lightrec_block_is_fully_tagged(const struct block *block);
+@@ -1601,6 +1603,19 @@ int lightrec_compile_block(struct lightrec_cstate *cstate,
+ 
+ 	start_of_block = jit_label();
+ 
++	/* debugging (front end's debug log): each block records its PC and counts
++	   its entries, so a hang report can tell which code runs */
++	if (psx_debug_trace) {
++		u8 tmp = lightrec_alloc_reg_temp(cstate->reg_cache, _jit);
++
++		jit_movi(tmp, block->pc);
++		jit_stxi_i(lightrec_offset(trace_pc), LIGHTREC_REG_STATE, tmp);
++		jit_ldxi_i(tmp, LIGHTREC_REG_STATE, lightrec_offset(trace_count));
++		jit_addi(tmp, tmp, 1);
++		jit_stxi_i(lightrec_offset(trace_count), LIGHTREC_REG_STATE, tmp);
++		lightrec_free_reg(cstate->reg_cache, tmp);
++	}
++
+ 	for (i = 0; i < block->nb_ops; i++) {
+ 		elm = &block->opcode_list[i];
+ 
+@@ -2177,6 +2192,12 @@ void lightrec_set_cycles_per_opcode(struct lightrec_state *state, u32 cycles)
+ 		lightrec_recompiler_unpause(state->rec);
+ }
+ 
++void lightrec_debug_trace(struct lightrec_state *state, u32 *pc, u32 *count)
++{
++	*pc = state->trace_pc;
++	*count = state->trace_count;
++}
++
+ int lightrec_debug_code(struct lightrec_state *state, u32 pc, int which,
+ 			const void **code, unsigned int *size,
+ 			unsigned int *nb_ops, unsigned int *flags)
+diff --git a/deps/lightrec/lightrec.h b/deps/lightrec/lightrec.h
+index 3dd2583d..5e8f59fa 100644
+--- a/deps/lightrec/lightrec.h
++++ b/deps/lightrec/lightrec.h
+@@ -155,6 +155,9 @@ __api __cnst struct lightrec_registers *
+ lightrec_get_registers(struct lightrec_state *state);
+ 
+ __api u32 lightrec_current_cycle_count(const struct lightrec_state *state);
++/* debugging: last block entered and the number of block entries, when blocks
++   are compiled with psx_debug_trace set */
++__api void lightrec_debug_trace(struct lightrec_state *state, u32 *pc, u32 *count);
+ /* debugging: native code of the block at pc (which = 0) or of the dispatcher
+    (which = 1); returns 0 if there is none */
+ __api int lightrec_debug_code(struct lightrec_state *state, u32 pc, int which,
+diff --git a/libpcsxcore/lightrec/plugin.c b/libpcsxcore/lightrec/plugin.c
+index 25b7ea70..c16b6025 100644
+--- a/libpcsxcore/lightrec/plugin.c
++++ b/libpcsxcore/lightrec/plugin.c
+@@ -772,3 +772,10 @@ int lightrec_plugin_debug_code(u32 pc, int which, const void **code, unsigned in
+ 		return 0;
+ 	return lightrec_debug_code(lightrec_state, pc, which, code, size, nb_ops, flags);
+ }
++
++void lightrec_plugin_debug_trace(u32 *pc, u32 *count)
++{
++	*pc = *count = 0;
++	if (lightrec_state)
++		lightrec_debug_trace(lightrec_state, pc, count);
++}
+diff --git a/libpcsxcore/misc.c b/libpcsxcore/misc.c
+index 1ef6cf18..c268fa39 100644
+--- a/libpcsxcore/misc.c
++++ b/libpcsxcore/misc.c
+@@ -57,14 +57,19 @@ const char *volatile psx_state_step;
+    calls a few seconds apart tell a stuck host-side wait (nothing moves) from a
+    game waiting in a loop (pc/cycle move, interrupts pending or masked). */
+ int cdrDebugState(char *b, int n);
++/* front end's debug log: Lightrec blocks record their PC and entries (set
++   before the game starts; blocks compiled with it set do it) */
++int psx_debug_trace;
+ #ifdef LIGHTREC
+ int lightrec_plugin_debug_code(u32 pc, int which, const void **code, unsigned int *size,
+ 			       unsigned int *nb_ops, unsigned int *flags);
++void lightrec_plugin_debug_trace(u32 *pc, u32 *count);
+ #endif
+ 
+-/* Hang dump for a front end: "HANG", version 1, pc, then for the block at pc and
+-   the dispatcher (Lightrec): host address (64-bit), code size, MIPS opcode count,
+-   flags, native code; then the 34 GPR/LO/HI registers, CP0 SR/Cause/EPC, 2 MiB
++/* Hang dump for a front end: "HANG", version 2, pc, last block entered and the
++   block entry count (Lightrec with psx_debug_trace), then for the block at pc,
++   the dispatcher and the last block entered: host address (64-bit), code size,
++   MIPS opcode count, flags, native code; then the 34 GPR/LO/HI registers, CP0 SR/Cause/EPC, 2 MiB
+    RAM, 1 KiB scratchpad. All little-endian. Writes to the front end's open FILE
+    (it flushes it to disk: the console usually gets switched off after a hang).
+    Returns 0 on a write error. */
+@@ -80,13 +85,19 @@ int psx_debug_dump(void *fp)
+ 	int which;
+ 	if (!f)
+ 		return 0;
++	u32 tpc = 0, tcount = 0;
++#ifdef LIGHTREC
++	if (psxCpu != &psxInt)
++		lightrec_plugin_debug_trace(&tpc, &tcount);
++#endif
+ 	fwrite("HANG", 1, 4, f);
+-	hd_w32(f, 1); hd_w32(f, pc);
+-	for (which = 0; which < 2; which++) {
++	hd_w32(f, 2); hd_w32(f, pc); hd_w32(f, tpc); hd_w32(f, tcount);
++	/* version 2: blocks at pc, the dispatcher, the last block entered */
++	for (which = 0; which < 3; which++) {
+ 		const void *code = NULL;
+ 		unsigned int size = 0, nb = 0, fl = 0;
+ #ifdef LIGHTREC
+-		if (psxCpu != &psxInt && !lightrec_plugin_debug_code(pc, which, &code, &size, &nb, &fl))
++		if (psxCpu != &psxInt && !lightrec_plugin_debug_code(which == 2 ? tpc : pc, which == 1, &code, &size, &nb, &fl))
+ 			code = NULL, size = 0;
+ #endif
+ 		if (!code) size = 0;
+@@ -117,7 +128,14 @@ void psx_debug_state(char *b, int n)
+ 		psxHu32(0x1070), psxHu32(0x1074), psxRegs.interrupt, frame_counter, hSyncCount,
+ 		psx_state_step ? psx_state_step : "-");
+ 	if (k > 0 && k < n)
+-		cdrDebugState(b + k, n - k);
++		k += cdrDebugState(b + k, n - k);
++#ifdef LIGHTREC
++	if (psxCpu != &psxInt && psx_debug_trace && k > 0 && k < n) {
++		u32 tpc, tcount;
++		lightrec_plugin_debug_trace(&tpc, &tcount);
++		snprintf(b + k, n - k, "; dynarec: last block %08x, %u block entries", tpc, tcount);
++	}
++#endif
+ }
+ static char *manuallyLoadedExePath;
+ 
+-- 
+2.43.0
+

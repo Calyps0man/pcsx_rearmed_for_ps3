@@ -1,0 +1,17 @@
+/* plain texture copy; filtering comes from the sampler state. DITHER: with the
+   PS1 dither pattern (dither.h) */
+#ifndef DITHER
+#define DITHER 0
+#endif
+#if DITHER
+#include "dither.h"
+half4 main(float2 uv : TEXCOORD0, float2 native : TEXCOORD4, uniform sampler2D tex) : COLOR
+{
+    return dither5(h4tex2D(tex, uv), native);
+}
+#else
+float4 main(float2 uv : TEXCOORD0, uniform sampler2D tex) : COLOR
+{
+    return tex2D(tex, uv);
+}
+#endif

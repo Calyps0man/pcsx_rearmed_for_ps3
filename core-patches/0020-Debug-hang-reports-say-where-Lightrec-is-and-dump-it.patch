@@ -1,0 +1,465 @@
+From bef5f7bc3893c995f7a4b8cc3c5fb944a07467cd Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 29 Oct 2026 21:47:19 +0000
+Subject: [PATCH] Debug: hang reports say where Lightrec is and dump its live
+ registers
+
+Lightrec records which part of it runs (recompiled code, the next-block
+lookup, interpreter, compiler, each C callback) with the PC and counters;
+the debug state line prints that plus the live ra/sp/a0/a1/s0 and the code
+LUT entries for ra and the current PC. The hang dump now holds Lightrec's
+live registers (psxRegs only gets them now and then).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ deps/lightrec/interpreter.c      |  11 ++-
+ deps/lightrec/lightrec-private.h |  18 +++++
+ deps/lightrec/lightrec.c         | 121 ++++++++++++++++++++++++++++++-
+ deps/lightrec/lightrec.h         |   2 +
+ libpcsxcore/lightrec/plugin.c    |  23 ++++++
+ libpcsxcore/misc.c               |  24 ++++--
+ 6 files changed, 190 insertions(+), 9 deletions(-)
+
+diff --git a/deps/lightrec/interpreter.c b/deps/lightrec/interpreter.c
+index dee385a1..d0727e1d 100644
+--- a/deps/lightrec/interpreter.c
++++ b/deps/lightrec/interpreter.c
+@@ -1225,8 +1225,15 @@ u32 lightrec_emulate_block(struct lightrec_state *state, struct block *block, u3
+ {
+ 	u32 offset = (kunseg(pc) - kunseg(block->pc)) >> 2;
+ 
+-	if (offset < block->nb_ops)
+-		return lightrec_emulate_block_list(state, block, offset);
++	if (offset < block->nb_ops) {
++		u32 ret;
++		LR_DBG_ENTER(LR_INTERP, pc, block->pc);
++
++		lightrec_dbg.n_interp++;
++		ret = lightrec_emulate_block_list(state, block, offset);
++		LR_DBG_LEAVE();
++		return ret;
++	}
+ 
+ 	pr_err(PC_FMT" is outside block at "PC_FMT"\n", pc, block->pc);
+ 
+diff --git a/deps/lightrec/lightrec-private.h b/deps/lightrec/lightrec-private.h
+index 7a5608d7..98a73098 100644
+--- a/deps/lightrec/lightrec-private.h
++++ b/deps/lightrec/lightrec-private.h
+@@ -213,6 +213,24 @@ void lightrec_free_block(struct lightrec_state *state, struct block *block);
+ 
+ void remove_from_code_lut(struct blockcache *cache, struct block *block);
+ 
++/* debugging (front end's hang reports): where the dynarec is and what it has
++   been doing, readable from another thread */
++struct lightrec_dbg {
++	volatile u32 where, pc, arg;
++	volatile u32 n_exec, n_next, n_loop, n_c, n_interp, n_comp, n_precomp;
++};
++extern struct lightrec_dbg lightrec_dbg;
++enum {
++	LR_OUTSIDE, LR_EXECUTE, LR_NATIVE, LR_NEXT_BLOCK, LR_INTERP, LR_COMPILE,
++	LR_PRECOMPILE, LR_C_RW, LR_C_RW_GENERIC, LR_C_MFC, LR_C_MTC, LR_C_CP,
++	LR_C_MEMSET, LR_C_LOAD_DELAY,
++};
++#define LR_DBG_ENTER(w, p, a) \
++	u32 lr_dbg_w = lightrec_dbg.where, lr_dbg_p = lightrec_dbg.pc, lr_dbg_a = lightrec_dbg.arg; \
++	lightrec_dbg.where = (w); lightrec_dbg.pc = (p); lightrec_dbg.arg = (a)
++#define LR_DBG_LEAVE() \
++	(lightrec_dbg.where = lr_dbg_w, lightrec_dbg.pc = lr_dbg_p, lightrec_dbg.arg = lr_dbg_a)
++
+ const struct lightrec_mem_map *
+ lightrec_get_map(struct lightrec_state *state, void **host, u32 kaddr);
+ 
+diff --git a/deps/lightrec/lightrec.c b/deps/lightrec/lightrec.c
+index 430ae5d9..8fbcf5f7 100644
+--- a/deps/lightrec/lightrec.c
++++ b/deps/lightrec/lightrec.c
+@@ -117,6 +117,8 @@ static const struct lightrec_mem_map_ops lightrec_default_ops = {
+ 	.swu = lightrec_default_swu,
+ };
+ 
++struct lightrec_dbg lightrec_dbg;
++
+ unsigned int lightrec_bad_accesses;
+ u32 lightrec_bad_access_addr, lightrec_bad_access_pc;
+ 
+@@ -425,10 +427,23 @@ static void lightrec_rw_helper(struct lightrec_state *state,
+ 
+ static void lightrec_rw_cb(struct lightrec_state *state, u32 arg)
+ {
++	LR_DBG_ENTER(LR_C_RW, state->curr_pc, arg);
++	lightrec_dbg.n_c++;
+ 	lightrec_rw_helper(state, (union code) arg, NULL, NULL, 0);
++	LR_DBG_LEAVE();
+ }
+ 
++static void lightrec_rw_generic_cb_(struct lightrec_state *state, u32 arg);
++
+ static void lightrec_rw_generic_cb(struct lightrec_state *state, u32 arg)
++{
++	LR_DBG_ENTER(LR_C_RW_GENERIC, state->curr_pc, arg);
++	lightrec_dbg.n_c++;
++	lightrec_rw_generic_cb_(state, arg);
++	LR_DBG_LEAVE();
++}
++
++static void lightrec_rw_generic_cb_(struct lightrec_state *state, u32 arg)
+ {
+ 	struct block *block;
+ 	struct opcode *op;
+@@ -541,12 +556,15 @@ u32 lightrec_mfc(struct lightrec_state *state, union code op)
+ 
+ static void lightrec_mfc_cb(struct lightrec_state *state, union code op)
+ {
++	LR_DBG_ENTER(LR_C_MFC, state->curr_pc, op.opcode);
++	lightrec_dbg.n_c++;
+ 	u32 rt = lightrec_mfc(state, op);
+ 
+ 	if (op.i.op == OP_SWC2)
+ 		state->temp_reg = rt;
+ 	else if (op.r.rt)
+ 		state->regs.gpr[op.r.rt] = rt;
++	LR_DBG_LEAVE();
+ }
+ 
+ static void lightrec_mtc0(struct lightrec_state *state, u8 reg, u32 data)
+@@ -671,6 +689,8 @@ void lightrec_mtc(struct lightrec_state *state, union code op, u8 reg, u32 data)
+ 
+ static void lightrec_mtc_cb(struct lightrec_state *state, u32 arg)
+ {
++	LR_DBG_ENTER(LR_C_MTC, state->curr_pc, arg);
++	lightrec_dbg.n_c++;
+ 	union code op = (union code) arg;
+ 	u32 data;
+ 	u8 reg;
+@@ -684,6 +704,7 @@ static void lightrec_mtc_cb(struct lightrec_state *state, u32 arg)
+ 	}
+ 
+ 	lightrec_mtc(state, op, reg, data);
++	LR_DBG_LEAVE();
+ }
+ 
+ void lightrec_rfe(struct lightrec_state *state)
+@@ -712,7 +733,10 @@ void lightrec_cp(struct lightrec_state *state, union code op)
+ 
+ static void lightrec_cp_cb(struct lightrec_state *state, u32 arg)
+ {
++	LR_DBG_ENTER(LR_C_CP, state->curr_pc, arg);
++	lightrec_dbg.n_c++;
+ 	lightrec_cp(state, (union code) arg);
++	LR_DBG_LEAVE();
+ }
+ 
+ static struct block * lightrec_get_block(struct lightrec_state *state, u32 pc)
+@@ -745,7 +769,12 @@ static struct block * lightrec_get_block(struct lightrec_state *state, u32 pc)
+ 	}
+ 
+ 	if (!block) {
+-		block = lightrec_precompile_block(state, pc);
++		{
++			LR_DBG_ENTER(LR_PRECOMPILE, pc, 0);
++			lightrec_dbg.n_precomp++;
++			block = lightrec_precompile_block(state, pc);
++			LR_DBG_LEAVE();
++		}
+ 		if (!block) {
+ 			pr_err("Unable to recompile block at "PC_FMT"\n", pc);
+ 			lightrec_set_exit_flags(state, LIGHTREC_EXIT_SEGFAULT);
+@@ -758,7 +787,7 @@ static struct block * lightrec_get_block(struct lightrec_state *state, u32 pc)
+ 	return block;
+ }
+ 
+-static void * get_next_block_func(struct lightrec_state *state, u32 pc)
++static void * get_next_block_func_(struct lightrec_state *state, u32 pc)
+ {
+ 	struct block *block;
+ 	bool should_recompile;
+@@ -766,6 +795,8 @@ static void * get_next_block_func(struct lightrec_state *state, u32 pc)
+ 	int err;
+ 
+ 	do {
++		lightrec_dbg.n_loop++;
++		lightrec_dbg.pc = pc;
+ 		func = lut_read(state, lut_offset(pc));
+ 		if (func && func != state->get_next_block)
+ 			break;
+@@ -842,6 +873,17 @@ static void * get_next_block_func(struct lightrec_state *state, u32 pc)
+ 	return func;
+ }
+ 
++static void * get_next_block_func(struct lightrec_state *state, u32 pc)
++{
++	void *func;
++	LR_DBG_ENTER(LR_NEXT_BLOCK, pc, 0);
++
++	lightrec_dbg.n_next++;
++	func = get_next_block_func_(state, pc);
++	LR_DBG_LEAVE();
++	return func;
++}
++
+ static void * lightrec_alloc_code(struct lightrec_state *state, size_t size)
+ {
+ 	void *code;
+@@ -1061,7 +1103,19 @@ err_no_mem:
+ 	return NULL;
+ }
+ 
++static u32 lightrec_memset_(struct lightrec_state *state);
++
+ static u32 lightrec_memset(struct lightrec_state *state)
++{
++	u32 ret;
++	LR_DBG_ENTER(LR_C_MEMSET, state->curr_pc, 0);
++
++	ret = lightrec_memset_(state);
++	LR_DBG_LEAVE();
++	return ret;
++}
++
++static u32 lightrec_memset_(struct lightrec_state *state)
+ {
+ 	u32 kunseg_pc = kunseg(state->regs.gpr[4]);
+ 	void *host;
+@@ -1085,7 +1139,19 @@ static u32 lightrec_memset(struct lightrec_state *state)
+ 	return 8 + 5 * (length  + 3 / 4);
+ }
+ 
++static u32 lightrec_check_load_delay_(struct lightrec_state *state, u32 pc, u8 reg);
++
+ static u32 lightrec_check_load_delay(struct lightrec_state *state, u32 pc, u8 reg)
++{
++	u32 ret;
++	LR_DBG_ENTER(LR_C_LOAD_DELAY, pc, reg);
++
++	ret = lightrec_check_load_delay_(state, pc, reg);
++	LR_DBG_LEAVE();
++	return ret;
++}
++
++static u32 lightrec_check_load_delay_(struct lightrec_state *state, u32 pc, u8 reg)
+ {
+ 	struct block *block;
+ 	union code first_op;
+@@ -1587,8 +1653,23 @@ static void lightrec_reap_opcode_list(struct lightrec_state *state, void *data)
+ 	lightrec_free_opcode_list(state, data);
+ }
+ 
++static int lightrec_compile_block_(struct lightrec_cstate *cstate,
++				   struct block *block);
++
+ int lightrec_compile_block(struct lightrec_cstate *cstate,
+ 			   struct block *block)
++{
++	int ret;
++	LR_DBG_ENTER(LR_COMPILE, block->pc, 0);
++
++	lightrec_dbg.n_comp++;
++	ret = lightrec_compile_block_(cstate, block);
++	LR_DBG_LEAVE();
++	return ret;
++}
++
++static int lightrec_compile_block_(struct lightrec_cstate *cstate,
++				   struct block *block)
+ {
+ 	struct block *dead_blocks[ARRAY_SIZE(cstate->targets)];
+ 	u32 was_dead[ARRAY_SIZE(cstate->targets) / 8];
+@@ -1863,6 +1944,9 @@ u32 lightrec_execute(struct lightrec_state *state, u32 pc, u32 target_cycle)
+ 	void *block_trace;
+ 	s32 cycles_delta;
+ 
++	lightrec_dbg.n_exec++;
++	lightrec_dbg.where = LR_EXECUTE;
++	lightrec_dbg.pc = pc;
+ 	state->exit_flags = LIGHTREC_EXIT_NORMAL;
+ 
+ 	/* Handle the cycle counter overflowing */
+@@ -1876,8 +1960,10 @@ u32 lightrec_execute(struct lightrec_state *state, u32 pc, u32 target_cycle)
+ 	if (block_trace) {
+ 		cycles_delta = state->target_cycle - state->current_cycle;
+ 
++		lightrec_dbg.where = LR_NATIVE;
+ 		cycles_delta = (*func)(state, state->curr_pc,
+ 				       block_trace, cycles_delta);
++		lightrec_dbg.where = LR_EXECUTE;
+ 
+ 		state->current_cycle = state->target_cycle - cycles_delta;
+ 	}
+@@ -1888,6 +1974,7 @@ u32 lightrec_execute(struct lightrec_state *state, u32 pc, u32 target_cycle)
+ 	if (LOG_LEVEL >= INFO_L)
+ 		lightrec_print_info(state);
+ 
++	lightrec_dbg.where = LR_OUTSIDE;
+ 	return state->curr_pc;
+ }
+ 
+@@ -2229,6 +2316,36 @@ void lightrec_set_cycles_per_opcode(struct lightrec_state *state, u32 cycles)
+ 		lightrec_recompiler_unpause(state->rec);
+ }
+ 
++int lightrec_debug_info(struct lightrec_state *state, char *b, int n)
++{
++	static const char *const names[] = {
++		"outside", "lightrec_execute", "recompiled code", "get_next_block_func",
++		"interpreter", "compiler", "precompiler", "C memory access",
++		"C memory access (generic)", "C mfc", "C mtc", "C cop op",
++		"C memset", "C load delay check",
++	};
++	struct lightrec_dbg d = lightrec_dbg;
++	u32 ra = state->regs.gpr[31];
++	const char *w = d.where < sizeof(names) / sizeof(names[0]) ? names[d.where] : "?";
++
++	return snprintf(b, n, "; lightrec in %s pc %08x arg %08x; runs %u, next-block %u (loops %u), "
++			"C calls %u, interpreter %u, compiles %u, precompiles %u; curr_pc %08x cycles %u/%u "
++			"exit %x; live ra %08x sp %08x a0 %08x a1 %08x s0 %08x; lut[ra] %p lut[curr] %p",
++			w, d.pc, d.arg, d.n_exec, d.n_next, d.n_loop, d.n_c, d.n_interp, d.n_comp,
++			d.n_precomp, state->curr_pc, state->current_cycle, state->target_cycle,
++			state->exit_flags, ra, state->regs.gpr[29], state->regs.gpr[4],
++			state->regs.gpr[5], state->regs.gpr[16],
++			lut_read(state, lut_offset(ra)), lut_read(state, lut_offset(state->curr_pc)));
++}
++
++void lightrec_debug_regs(struct lightrec_state *state, u32 *gpr34, u32 *cp0_3)
++{
++	memcpy(gpr34, state->regs.gpr, 34 * sizeof(u32));
++	cp0_3[0] = state->regs.cp0[12];
++	cp0_3[1] = state->regs.cp0[13];
++	cp0_3[2] = state->regs.cp0[14];
++}
++
+ void lightrec_debug_trace(struct lightrec_state *state, u32 *pc, u32 *count)
+ {
+ 	*pc = state->trace_pc;
+diff --git a/deps/lightrec/lightrec.h b/deps/lightrec/lightrec.h
+index 5e8f59fa..fa15b772 100644
+--- a/deps/lightrec/lightrec.h
++++ b/deps/lightrec/lightrec.h
+@@ -158,6 +158,8 @@ __api u32 lightrec_current_cycle_count(const struct lightrec_state *state);
+ /* debugging: last block entered and the number of block entries, when blocks
+    are compiled with psx_debug_trace set */
+ __api void lightrec_debug_trace(struct lightrec_state *state, u32 *pc, u32 *count);
++__api int lightrec_debug_info(struct lightrec_state *state, char *b, int n);
++__api void lightrec_debug_regs(struct lightrec_state *state, u32 *gpr34, u32 *cp0_3);
+ /* debugging: native code of the block at pc (which = 0) or of the dispatcher
+    (which = 1); returns 0 if there is none */
+ __api int lightrec_debug_code(struct lightrec_state *state, u32 pc, int which,
+diff --git a/libpcsxcore/lightrec/plugin.c b/libpcsxcore/lightrec/plugin.c
+index 546384f6..53a33505 100644
+--- a/libpcsxcore/lightrec/plugin.c
++++ b/libpcsxcore/lightrec/plugin.c
+@@ -81,6 +81,9 @@ static unsigned char ps3_code_buffer[CODE_BUFFER_SIZE]
+ 
+ static struct lightrec_state *lightrec_state;
+ 
++/* where lightrec_plugin_execute_internal() is (for hang reports) */
++static volatile int plugin_where;
++
+ static bool use_lightrec_interpreter;
+ static bool block_stepping;
+ //static bool use_pcsx_interpreter;
+@@ -564,7 +567,9 @@ static void lightrec_plugin_execute_internal(bool block_only)
+ 	u32 old_pc = psxRegs.pc;
+ 
+ 	regs = lightrec_get_registers(lightrec_state);
++	plugin_where = 1;
+ 	gen_interupt((psxCP0Regs *)regs->cp0);
++	plugin_where = 0;
+ 	if (!block_only && psxRegs.stop)
+ 		return;
+ 
+@@ -586,8 +591,10 @@ static void lightrec_plugin_execute_internal(bool block_only)
+ 							      psxRegs.pc,
+ 							      cycles_lightrec);
+ 		} else {
++			plugin_where = 2;
+ 			psxRegs.pc = lightrec_execute(lightrec_state,
+ 						      psxRegs.pc, cycles_lightrec);
++			plugin_where = 3;
+ 		}
+ 
+ 		lightrec_transition_to_pcsx(lightrec_state);
+@@ -638,6 +645,7 @@ static void lightrec_plugin_execute_internal(bool block_only)
+ 		regs->cp0[13] &= ~0x7c;
+ 		psxException(regs->cp0[13], 0, (psxCP0Regs *)regs->cp0);
+ 	}
++	plugin_where = 0;
+ }
+ 
+ static void lightrec_plugin_execute(psxRegisters *regs)
+@@ -776,6 +784,21 @@ int lightrec_plugin_debug_code(u32 pc, int which, const void **code, unsigned in
+ 	return lightrec_debug_code(lightrec_state, pc, which, code, size, nb_ops, flags);
+ }
+ 
++int lightrec_plugin_debug_info(char *b, int n)
++{
++	static const char *const names[] = { "idle", "events", "dynarec", "after the dynarec" };
++	int k = snprintf(b, n, "; plugin at %s", names[plugin_where & 3]);
++	if (lightrec_state && k > 0 && k < n)
++		k += lightrec_debug_info(lightrec_state, b + k, n - k);
++	return k;
++}
++
++void lightrec_plugin_debug_regs(u32 *gpr34, u32 *cp0_3)
++{
++	if (lightrec_state)
++		lightrec_debug_regs(lightrec_state, gpr34, cp0_3);
++}
++
+ void lightrec_plugin_debug_trace(u32 *pc, u32 *count)
+ {
+ 	*pc = *count = 0;
+diff --git a/libpcsxcore/misc.c b/libpcsxcore/misc.c
+index cb3b99a7..fbeaa03b 100644
+--- a/libpcsxcore/misc.c
++++ b/libpcsxcore/misc.c
+@@ -64,6 +64,8 @@ int psx_debug_trace;
+ int lightrec_plugin_debug_code(u32 pc, int which, const void **code, unsigned int *size,
+ 			       unsigned int *nb_ops, unsigned int *flags);
+ void lightrec_plugin_debug_trace(u32 *pc, u32 *count);
++int lightrec_plugin_debug_info(char *b, int n);
++void lightrec_plugin_debug_regs(u32 *gpr34, u32 *cp0_3);
+ #endif
+ 
+ /* Hang dump for a front end: "HANG", version 2, pc, last block entered and the
+@@ -106,9 +108,19 @@ int psx_debug_dump(void *fp)
+ 		if (size)
+ 			fwrite(code, 1, size, f);
+ 	}
+-	for (i = 0; i < 34; i++)
+-		hd_w32(f, psxRegs.GPR.r[i]);
+-	hd_w32(f, psxRegs.CP0.n.SR); hd_w32(f, psxRegs.CP0.n.Cause); hd_w32(f, psxRegs.CP0.n.EPC);
++	{	/* the dynarec keeps the live registers itself (psxRegs gets them
++		   only now and then) */
++		u32 gpr[34], cp0[3];
++		memcpy(gpr, psxRegs.GPR.r, sizeof(gpr));
++		cp0[0] = psxRegs.CP0.n.SR; cp0[1] = psxRegs.CP0.n.Cause; cp0[2] = psxRegs.CP0.n.EPC;
++#ifdef LIGHTREC
++		if (psxCpu != &psxInt)
++			lightrec_plugin_debug_regs(gpr, cp0);
++#endif
++		for (i = 0; i < 34; i++)
++			hd_w32(f, gpr[i]);
++		hd_w32(f, cp0[0]); hd_w32(f, cp0[1]); hd_w32(f, cp0[2]);
++	}
+ 	fwrite(psxRegs.ptrs.psxM, 1, 0x200000, f);   /* PS1 memory bytes as they are (little-endian) */
+ 	fwrite(psxRegs.ptrs.psxH, 1, 0x400, f);
+ 	return !ferror(f);
+@@ -146,8 +158,10 @@ void psx_debug_state(char *b, int n)
+ 		k += snprintf(b + k, n - k, "; dynarec: last block %08x, %u block entries, code buffer full %u times",
+ 			      tpc, tcount, lightrec_code_flushes);
+ 		if (k > 0 && k < n)
+-			snprintf(b + k, n - k, ", accesses to unmapped memory %u (last %08x in block %08x)",
+-				 lightrec_bad_accesses, lightrec_bad_access_addr, lightrec_bad_access_pc);
++			k += snprintf(b + k, n - k, ", accesses to unmapped memory %u (last %08x in block %08x)",
++				      lightrec_bad_accesses, lightrec_bad_access_addr, lightrec_bad_access_pc);
++		if (k > 0 && k < n)
++			k += lightrec_plugin_debug_info(b + k, n - k);
+ 	}
+ #endif
+ }
+-- 
+2.43.0
+

@@ -1,0 +1,235 @@
+From e098a14c1c31547ae32bec5f516df3e028550d8f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 06:13:10 +0000
+Subject: [PATCH] lightning (PPC): no microcoded instructions in Lightrec's
+ code on the Cell PPU
+
+The Cell PPU microcodes the sign-extending loads (lha, lhax, lwa, lwax) and
+every CR-recording instruction such as andi./andis. (11 cycles and a stall
+each). Lightrec's code used lwa for every guest register load, lwax/lha for
+memory loads and andis./andi. in each memory access's address check. On
+lv2 (or with LIGHTNING_CELL) these become lwz/lhz + extsw/extsh, and andi
+becomes rlwinm for a run of ones (and/or a register otherwise); the size
+tables allow for the extra instruction. Host check with LIGHTNING_CELL:
+generated code has none of them left, all 72 test programs unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ deps/lightning/lib/jit_ppc-cpu.c | 44 +++++++++++++++++++++-
+ deps/lightning/lib/jit_ppc-sz.c  | 64 ++++++++++++++++----------------
+ 2 files changed, 74 insertions(+), 34 deletions(-)
+
+diff --git a/deps/lightning/lib/jit_ppc-cpu.c b/deps/lightning/lib/jit_ppc-cpu.c
+index e1829c7b..162817eb 100644
+--- a/deps/lightning/lib/jit_ppc-cpu.c
++++ b/deps/lightning/lib/jit_ppc-cpu.c
+@@ -295,6 +295,20 @@ static void _FXS(jit_state_t*,int,int,int,int,int,int,int);
+ #  define LWA(d,a,s)			FDs(58,d,a,s|2)
+ #  define LWAUX(d,a,b)			FX(31,d,a,b,373)
+ #  define LWAX(d,a,b)			FX(31,d,a,b,341)
++#  if defined(__lv2ppu__) || defined(LIGHTNING_CELL)
++/* The Cell PPU microcodes the sign-extending loads (lha, lhax, lwa, lwax: about
++ * 11 cycles and a pipeline stall each, IBM's Cell performance notes); a plain
++ * load and an extend are two cheap instructions (the size tables in
++ * jit_ppc-sz.c allow for the extra one). */
++#    undef LHA
++#    undef LHAX
++#    undef LWA
++#    undef LWAX
++#    define LHA(d,a,s)		do { LHZ(d,a,s); EXTSH(d,d); } while (0)
++#    define LHAX(d,a,b)		do { LHZX(d,a,b); EXTSH(d,d); } while (0)
++#    define LWA(d,a,s)		do { LWZ(d,a,s); EXTSW(d,d); } while (0)
++#    define LWAX(d,a,b)		do { LWZX(d,a,b); EXTSW(d,d); } while (0)
++#  endif
+ #  define LWZ(d,a,s)			FDs(32,d,a,s)
+ #  define LWZU(d,a,s)			FDs(33,d,a,s)
+ #  define LWZUX(d,a,b)			FX(31,d,a,b,55)
+@@ -563,9 +577,17 @@ static void _extr_u(jit_state_t*,jit_int32_t,jit_int32_t,jit_word_t,jit_word_t);
+ #  define depr(r0,r1,i0,i1)		_depr(_jit,r0,r1,i0,i1)
+ static void _depr(jit_state_t*,jit_int32_t,jit_int32_t,jit_word_t,jit_word_t);
+ #  define extr_c(r0,r1)			EXTSB(r0,r1)
+-#  define extr_uc(r0,r1)		ANDI_(r0,r1,0xff)
++#  if defined(__lv2ppu__) || defined(LIGHTNING_CELL)	/* andi. is microcoded on the Cell PPU */
++#    define extr_uc(r0,r1)		RLWINM(r0,r1,0,24,31)
++#  else
++#    define extr_uc(r0,r1)		ANDI_(r0,r1,0xff)
++#  endif
+ #  define extr_s(r0,r1)			EXTSH(r0,r1)
+-#  define extr_us(r0,r1)		ANDI_(r0,r1,0xffff)
++#  if defined(__lv2ppu__) || defined(LIGHTNING_CELL)
++#    define extr_us(r0,r1)		RLWINM(r0,r1,0,16,31)
++#  else
++#    define extr_us(r0,r1)		ANDI_(r0,r1,0xffff)
++#  endif
+ #  if __WORDSIZE == 64
+ #    define extr_i(r0,r1)		EXTSW(r0,r1)
+ #    define extr_ui(r0,r1)		CLRLDI(r0,r1,32)
+@@ -1813,6 +1835,24 @@ static void
+ _andi(jit_state_t *_jit, jit_int32_t r0, jit_int32_t r1, jit_word_t i0)
+ {
+     jit_int32_t		reg, offt;
++#  if defined(__lv2ppu__) || defined(LIGHTNING_CELL)
++    /* andi./andis. record to CR0, which the Cell PPU microcodes (11 cycles and a
++     * stall): use rlwinm for a run of ones in the low word (it clears the high
++     * word like andi. does), and/or a register otherwise */
++    {
++	jit_uword_t	u = (jit_uword_t)i0;
++	if (u && u <= 0xffffffffUL && !((u + (u & -u)) & ((u + (u & -u)) - 1))) {
++	    offt = __builtin_ctzl(u);
++	    RLWINM(r0, r1, 0, 32 - offt - __builtin_popcountl(u), 31 - offt);
++	    return;
++	}
++	reg = jit_get_reg(jit_class_gpr);
++	movi(rn(reg), i0);
++	AND(r0, r1, rn(reg));
++	jit_unget_reg(reg);
++	return;
++    }
++#  endif
+     if (can_zero_extend_short_p(i0))
+ 	ANDI_(r0, r1, i0);
+     else if (can_zero_extend_int_p(i0) && !(i0 & 0x0000ffff))
+diff --git a/deps/lightning/lib/jit_ppc-sz.c b/deps/lightning/lib/jit_ppc-sz.c
+index c275d28e..607db278 100644
+--- a/deps/lightning/lib/jit_ppc-sz.c
++++ b/deps/lightning/lib/jit_ppc-sz.c
+@@ -147,12 +147,12 @@
+     12, /* ldi_c */
+     4,	/* ldr_uc */
+     8,	/* ldi_uc */
+-    4,	/* ldr_s */
+-    8,	/* ldi_s */
++    8,	/* ldr_s */
++    12,	/* ldi_s */
+     4,	/* ldr_us */
+     8,	/* ldi_us */
+-    4,	/* ldr_i */
+-    8,	/* ldi_i */
++    8,	/* ldr_i */
++    12,	/* ldi_i */
+     0,	/* ldr_ui */
+     0,	/* ldi_ui */
+     0,	/* ldr_l */
+@@ -161,12 +161,12 @@
+     16, /* ldxi_c */
+     4,	/* ldxr_uc */
+     12, /* ldxi_uc */
+-    4,	/* ldxr_s */
+-    12, /* ldxi_s */
++    8,	/* ldxr_s */
++    16, /* ldxi_s */
+     4,	/* ldxr_us */
+     12, /* ldxi_us */
+-    4,	/* ldxr_i */
+-    12, /* ldxi_i */
++    8,	/* ldxr_i */
++    16, /* ldxi_i */
+     0,	/* ldxr_ui */
+     0,	/* ldxi_ui */
+     0,	/* ldxr_l */
+@@ -745,12 +745,12 @@
+     12, /* ldi_c */
+     4,	/* ldr_uc */
+     8,	/* ldi_uc */
+-    4,	/* ldr_s */
+-    8,	/* ldi_s */
++    8,	/* ldr_s */
++    12,	/* ldi_s */
+     4,	/* ldr_us */
+     8,	/* ldi_us */
+-    4,	/* ldr_i */
+-    8,	/* ldi_i */
++    8,	/* ldr_i */
++    12,	/* ldi_i */
+     0,	/* ldr_ui */
+     0,	/* ldi_ui */
+     0,	/* ldr_l */
+@@ -759,12 +759,12 @@
+     16, /* ldxi_c */
+     4,	/* ldxr_uc */
+     12, /* ldxi_uc */
+-    4,	/* ldxr_s */
+-    12, /* ldxi_s */
++    8,	/* ldxr_s */
++    16, /* ldxi_s */
+     4,	/* ldxr_us */
+     12, /* ldxi_us */
+-    4,	/* ldxr_i */
+-    12, /* ldxi_i */
++    8,	/* ldxr_i */
++    16, /* ldxi_i */
+     0,	/* ldxr_ui */
+     0,	/* ldxi_ui */
+     0,	/* ldxr_l */
+@@ -1342,12 +1342,12 @@
+     28, /* ldi_c */
+     4,	/* ldr_uc */
+     24, /* ldi_uc */
+-    4,	/* ldr_s */
+-    24, /* ldi_s */
++    8,	/* ldr_s */
++    28, /* ldi_s */
+     4,	/* ldr_us */
+     24, /* ldi_us */
+-    4,	/* ldr_i */
+-    24, /* ldi_i */
++    8,	/* ldr_i */
++    28, /* ldi_i */
+     4,	/* ldr_ui */
+     24, /* ldi_ui */
+     4,	/* ldr_l */
+@@ -1356,12 +1356,12 @@
+     16, /* ldxi_c */
+     4,	/* ldxr_uc */
+     12, /* ldxi_uc */
+-    4,	/* ldxr_s */
+-    12, /* ldxi_s */
++    8,	/* ldxr_s */
++    16, /* ldxi_s */
+     4,	/* ldxr_us */
+     12, /* ldxi_us */
+-    4,	/* ldxr_i */
+-    12, /* ldxi_i */
++    8,	/* ldxr_i */
++    16, /* ldxi_i */
+     4,	/* ldxr_ui */
+     12, /* ldxi_ui */
+     4,	/* ldxr_l */
+@@ -1938,12 +1938,12 @@
+     28, /* ldi_c */
+     4,	/* ldr_uc */
+     24, /* ldi_uc */
+-    4,	/* ldr_s */
+-    24, /* ldi_s */
++    8,	/* ldr_s */
++    28, /* ldi_s */
+     4,	/* ldr_us */
+     24, /* ldi_us */
+-    4,	/* ldr_i */
+-    24, /* ldi_i */
++    8,	/* ldr_i */
++    28, /* ldi_i */
+     4,	/* ldr_ui */
+     24, /* ldi_ui */
+     4,	/* ldr_l */
+@@ -1952,12 +1952,12 @@
+     16, /* ldxi_c */
+     4,	/* ldxr_uc */
+     12, /* ldxi_uc */
+-    4,	/* ldxr_s */
+-    12, /* ldxi_s */
++    8,	/* ldxr_s */
++    16, /* ldxi_s */
+     4,	/* ldxr_us */
+     12, /* ldxi_us */
+-    4,	/* ldxr_i */
+-    12, /* ldxi_i */
++    8,	/* ldxr_i */
++    16, /* ldxi_i */
+     4,	/* ldxr_ui */
+     12, /* ldxi_ui */
+     4,	/* ldxr_l */
+-- 
+2.43.0
+

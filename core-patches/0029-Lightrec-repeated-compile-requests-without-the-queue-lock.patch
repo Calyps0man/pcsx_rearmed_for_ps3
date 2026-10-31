@@ -1,0 +1,211 @@
+From 6491e1f5716768f181f91daaf272982e8c219dc3 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 22:53:16 +0000
+Subject: [PATCH] Lightrec: answer repeated compile requests without the
+ queue's lock
+
+While a game loads new code, the emulation thread asks the threaded compiler
+for each block it meets that is not compiled yet, thousands of times per
+frame; each request took the queue's lock and walked the queue (hundreds of
+jobs). On the PS3 the emulation thread spent most of such frames there (GT2
+race start: 210 of 295 ms). A block flag now says the block is queued:
+repeated requests only count (its priority), and compiled blocks with nothing
+to redo return at once. The slow-frame timers are split by call.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ deps/lightrec/lightrec-private.h |  7 +++-
+ deps/lightrec/lightrec.c         |  8 +++++
+ deps/lightrec/reaper.c           |  4 ++-
+ deps/lightrec/recompiler.c       | 59 ++++++++++++++++++++++++++------
+ 4 files changed, 65 insertions(+), 13 deletions(-)
+
+diff --git a/deps/lightrec/lightrec-private.h b/deps/lightrec/lightrec-private.h
+index 7c062518..6975327a 100644
+--- a/deps/lightrec/lightrec-private.h
++++ b/deps/lightrec/lightrec-private.h
+@@ -84,6 +84,7 @@
+ #define BLOCK_IS_MEMSET		BIT(4)
+ #define BLOCK_NO_OPCODE_LIST	BIT(5)
+ #define BLOCK_PRELOAD_PC	BIT(6)
++#define BLOCK_IN_QUEUE		BIT(7)	/* waiting in the threaded compiler's queue (or being compiled) */
+ 
+ #define RAM_SIZE	0x200000
+ #define BIOS_SIZE	0x80000
+@@ -125,6 +126,9 @@ struct block {
+ 	unsigned int code_size;
+ 	u16 nb_ops;
+ #if LIGHTREC_THREADED_BUILT
++	/* requests for the block while it waits in the compile queue, counted
++	   without the queue's lock (adds to its priority) */
++	unsigned int queue_requests;
+ 	_Atomic u8 flags;
+ #else
+ 	u8 flags;
+@@ -224,7 +228,8 @@ struct lightrec_dbg {
+ 	volatile u32 n_outdated;
+ 	volatile u64 t_lookup, t_precomp, t_interp, t_comp;
+ 	/* time in the compile queue and reaper calls (locks, waits for the compiler) */
+-	volatile u64 t_queue;
++	volatile u64 t_queue, t_add, t_remove, t_reap;
++	volatile u32 n_add_fast, n_add_slow;
+ };
+ static inline u64 lightrec_ticks(void)
+ {
+diff --git a/deps/lightrec/lightrec.c b/deps/lightrec/lightrec.c
+index b6cee231..80577d05 100644
+--- a/deps/lightrec/lightrec.c
++++ b/deps/lightrec/lightrec.c
+@@ -131,6 +131,11 @@ void lightrec_debug_counts(u32 *c, u64 *t)
+ 	t[2] = lightrec_dbg.t_interp;
+ 	t[3] = lightrec_dbg.t_comp;
+ 	t[4] = lightrec_dbg.t_queue;
++	t[5] = lightrec_dbg.t_add;
++	t[6] = lightrec_dbg.t_remove;
++	t[7] = lightrec_dbg.t_reap;
++	c[4] = lightrec_dbg.n_add_fast;
++	c[5] = lightrec_dbg.n_add_slow;
+ }
+ 
+ unsigned int lightrec_bad_accesses;
+@@ -1567,6 +1572,9 @@ static struct block * lightrec_precompile_block(struct lightrec_state *state,
+ 	block->code = code;
+ 	block->next = NULL;
+ 	block->flags = 0;
++#if LIGHTREC_THREADED_BUILT
++	block->queue_requests = 0;
++#endif
+ 	block->code_size = 0;
+ 	block->precompile_date = state->current_cycle;
+ 	block->nb_ops = length / sizeof(u32);
+diff --git a/deps/lightrec/reaper.c b/deps/lightrec/reaper.c
+index 661f0e7f..bf1d8de6 100644
+--- a/deps/lightrec/reaper.c
++++ b/deps/lightrec/reaper.c
+@@ -150,7 +150,9 @@ void lightrec_reaper_reap(struct reaper *reaper)
+ 	}
+ 
+ 	pthread_mutex_unlock(&reaper->mutex);
+-	__atomic_fetch_add(&lightrec_dbg.t_queue, lightrec_ticks() - t0, __ATOMIC_RELAXED);
++	t0 = lightrec_ticks() - t0;
++	__atomic_fetch_add(&lightrec_dbg.t_queue, t0, __ATOMIC_RELAXED);
++	__atomic_fetch_add(&lightrec_dbg.t_reap, t0, __ATOMIC_RELAXED);
+ }
+ 
+ void lightrec_reaper_pause(struct reaper *reaper)
+diff --git a/deps/lightrec/recompiler.c b/deps/lightrec/recompiler.c
+index bc17ffbe..917b2a0f 100644
+--- a/deps/lightrec/recompiler.c
++++ b/deps/lightrec/recompiler.c
+@@ -79,13 +79,24 @@ static struct block_rec * lightrec_get_best_elm(struct slist_elm *head)
+ 		block_rec = container_of(elm, struct block_rec, slist);
+ 
+ 		if (!block_rec->compiling
+-		    && (!best || block_rec->requests > best->requests))
++		    && (!best || block_rec->requests + block_rec->block->queue_requests >
++				 best->requests + best->block->queue_requests))
+ 			best = block_rec;
+ 	}
+ 
+ 	return best;
+ }
+ 
++/* takes a job off the queue (queue lock held) */
++static void lightrec_drop_block_rec(struct recompiler *rec,
++				    struct block_rec *block_rec)
++{
++	block_clear_flags(block_rec->block, BLOCK_IN_QUEUE);
++	slist_remove(&rec->slist, &block_rec->slist);
++	lightrec_free(rec->state, MEM_FOR_LIGHTREC,
++		      sizeof(*block_rec), block_rec);
++}
++
+ static bool lightrec_cancel_block_rec(struct recompiler *rec,
+ 				      struct block_rec *block_rec)
+ {
+@@ -103,9 +114,7 @@ static bool lightrec_cancel_block_rec(struct recompiler *rec,
+ 	}
+ 
+ 	/* Block is not yet being processed - remove it from the list */
+-	slist_remove(&rec->slist, &block_rec->slist);
+-	lightrec_free(rec->state, MEM_FOR_LIGHTREC,
+-		      sizeof(*block_rec), block_rec);
++	lightrec_drop_block_rec(rec, block_rec);
+ 
+ 	return true;
+ }
+@@ -180,9 +189,7 @@ static void lightrec_compile_list(struct recompiler *rec,
+ 
+ 		pthread_mutex_lock(&rec->mutex);
+ 
+-		slist_remove(&rec->slist, &block_rec->slist);
+-		lightrec_free(rec->state, MEM_FOR_LIGHTREC,
+-			      sizeof(*block_rec), block_rec);
++		lightrec_drop_block_rec(rec, block_rec);
+ 		pthread_cond_broadcast(&rec->cond2);
+ 	}
+ }
+@@ -331,9 +338,34 @@ void lightrec_free_recompiler(struct recompiler *rec)
+ static int lightrec_recompiler_add_(struct recompiler *rec, struct block *block);
+ int lightrec_recompiler_add(struct recompiler *rec, struct block *block)
+ {
+-	u64 t0 = lightrec_ticks();
+-	int ret = lightrec_recompiler_add_(rec, block);
+-	__atomic_fetch_add(&lightrec_dbg.t_queue, lightrec_ticks() - t0, __ATOMIC_RELAXED);
++	u64 t0, t;
++	u8 flags = atomic_load_explicit(&block->flags, memory_order_acquire);
++	int ret;
++
++	/* Called each time the emulation thread meets a block that is not
++	 * compiled yet (thousands of times per frame while a game loads new
++	 * code) and for compiled blocks found outside the code LUT. Answer the
++	 * common cases without the queue's lock and without walking the queue
++	 * (hundreds of jobs then), which made the emulation thread wait for
++	 * the compiler thread most of the time:
++	 * - already queued: only count the request (its priority);
++	 * - compiled, nothing to redo: nothing to do (as the locked path). */
++	if (flags & BLOCK_IN_QUEUE) {
++		__atomic_fetch_add(&block->queue_requests, 1, __ATOMIC_RELAXED);
++		lightrec_dbg.n_add_fast++;
++		return 0;
++	}
++	if (block->function && !(flags & (BLOCK_SHOULD_RECOMPILE | BLOCK_IS_DEAD))) {
++		lightrec_dbg.n_add_fast++;
++		return 0;
++	}
++
++	lightrec_dbg.n_add_slow++;
++	t0 = lightrec_ticks();
++	ret = lightrec_recompiler_add_(rec, block);
++	t = lightrec_ticks() - t0;
++	__atomic_fetch_add(&lightrec_dbg.t_queue, t, __ATOMIC_RELAXED);
++	__atomic_fetch_add(&lightrec_dbg.t_add, t, __ATOMIC_RELAXED);
+ 	return ret;
+ }
+ 
+@@ -406,6 +438,8 @@ static int lightrec_recompiler_add_(struct recompiler *rec, struct block *block)
+ 	block_rec->block = block;
+ 	block_rec->compiling = false;
+ 	block_rec->requests = 1;
++	block->queue_requests = 0;
++	block_set_flags(block, BLOCK_IN_QUEUE);
+ 
+ 	elm = &rec->slist;
+ 
+@@ -425,8 +459,11 @@ static void lightrec_recompiler_remove_(struct recompiler *rec, struct block *bl
+ void lightrec_recompiler_remove(struct recompiler *rec, struct block *block)
+ {
+ 	u64 t0 = lightrec_ticks();
++	u64 t;
+ 	lightrec_recompiler_remove_(rec, block);
+-	__atomic_fetch_add(&lightrec_dbg.t_queue, lightrec_ticks() - t0, __ATOMIC_RELAXED);
++	t = lightrec_ticks() - t0;
++	__atomic_fetch_add(&lightrec_dbg.t_queue, t, __ATOMIC_RELAXED);
++	__atomic_fetch_add(&lightrec_dbg.t_remove, t, __ATOMIC_RELAXED);
+ }
+ 
+ static void lightrec_recompiler_remove_(struct recompiler *rec, struct block *block)
+-- 
+2.43.0
+

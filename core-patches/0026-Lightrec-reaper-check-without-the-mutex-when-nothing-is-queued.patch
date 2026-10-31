@@ -1,0 +1,37 @@
+From fbd6e43ba6eba1868ab3f508e0607481aa0ddac1 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 22:25:10 +0000
+Subject: [PATCH] Lightrec: reaper check without the mutex when nothing is
+ queued
+
+lightrec_reaper_reap() runs each time the emulator gets control back, about
+1900 times per frame in Gran Turismo 2, and locked a mutex every time. On the
+PS3 that is a system call: about 4 ms per frame in the threaded mode.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ deps/lightrec/reaper.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/deps/lightrec/reaper.c b/deps/lightrec/reaper.c
+index 777b9970..d12b2089 100644
+--- a/deps/lightrec/reaper.c
++++ b/deps/lightrec/reaper.c
+@@ -119,6 +119,13 @@ void lightrec_reaper_reap(struct reaper *reaper)
+ 	struct reaper_elm *reaper_elm;
+ 	struct slist_elm *elm;
+ 
++	/* Called each time the emulator gets control back (thousands of times per
++	 * frame) and the list is nearly always empty: look without the mutex,
++	 * which is a system call on some hosts (PS3). Something added while we
++	 * look is reaped on the next call. */
++	if (!__atomic_load_n(&reaper->reap_list.next, __ATOMIC_ACQUIRE))
++		return;
++
+ 	pthread_mutex_lock(&reaper->mutex);
+ 
+ 	while (lightrec_reaper_can_reap(reaper) &&
+-- 
+2.43.0
+

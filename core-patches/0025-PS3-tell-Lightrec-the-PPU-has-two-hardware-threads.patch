@@ -1,0 +1,50 @@
+From dbeb9f7f1eebbdd2c70d9b82cb22ec415b341d1d Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 22:11:57 +0000
+Subject: [PATCH] PS3: tell Lightrec the PPU has two hardware threads
+
+sysconf() on PSL1GHT answers only _SC_PAGESIZE, so Lightrec counted one CPU
+and took its single-core path: each repeated request for a block already
+queued made the emulation thread wait for the compiler thread.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ Makefile.libretro          | 2 +-
+ deps/lightrec/recompiler.c | 7 ++++++-
+ 2 files changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/Makefile.libretro b/Makefile.libretro
+index df6af909..9a68dc29 100644
+--- a/Makefile.libretro
++++ b/Makefile.libretro
+@@ -323,7 +323,7 @@ else ifeq ($(platform), psl1ght)
+ 	# Lightrec's threaded compiler, switched on or off at run time by the front end;
+ 	# its few POSIX thread calls come from libpcsxcore/lightrec/ps3 (lv2 threads)
+ 	LIGHTREC_THREADED_COMPILER := 1
+-	CFLAGS += -DLIGHTREC_THREADED_RUNTIME=1
++	CFLAGS += -DLIGHTREC_THREADED_RUNTIME=1 -DLIGHTREC_NB_CPUS=2
+   deps/lightrec/%.o: CFLAGS += -Ilibpcsxcore/lightrec/ps3
+ 	OBJS += libpcsxcore/lightrec/ps3/pthread.o
+ 	# pcsxr-threads.c has its own lv2 thread code
+diff --git a/deps/lightrec/recompiler.c b/deps/lightrec/recompiler.c
+index 85310361..357b2477 100644
+--- a/deps/lightrec/recompiler.c
++++ b/deps/lightrec/recompiler.c
+@@ -51,7 +51,12 @@ static unsigned int get_processors_count(void)
+ {
+ 	int nb = 1;
+ 
+-#if defined(PTW32_VERSION)
++#if defined(LIGHTREC_NB_CPUS)
++	/* set by the build where the C library cannot tell (PS3: two PPU hardware
++	   threads, sysconf() answers 1). With 1, every repeated request for a
++	   queued block makes the emulation thread wait for the compiler. */
++	nb = LIGHTREC_NB_CPUS;
++#elif defined(PTW32_VERSION)
+         nb = pthread_num_processors_np();
+ #elif defined(__APPLE__) || defined(__FreeBSD__)
+         int count;
+-- 
+2.43.0
+

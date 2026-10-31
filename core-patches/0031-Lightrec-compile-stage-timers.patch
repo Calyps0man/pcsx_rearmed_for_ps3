@@ -1,0 +1,151 @@
+From ad4ed526412773f6270d113d442d54539d703d26 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 23:28:19 +0000
+Subject: [PATCH] Lightrec/Lightning: compile-stage and allocation timers for
+ the slow-frame log
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ deps/lightning/lib/jit_memory.c  | 22 ++++++++++++++++++++++
+ deps/lightrec/lightrec-private.h |  5 +++++
+ deps/lightrec/lightrec.c         | 23 +++++++++++++++++++++++
+ 3 files changed, 50 insertions(+)
+
+diff --git a/deps/lightning/lib/jit_memory.c b/deps/lightning/lib/jit_memory.c
+index 8e736da1..e3513dcc 100644
+--- a/deps/lightning/lib/jit_memory.c
++++ b/deps/lightning/lib/jit_memory.c
+@@ -79,27 +79,49 @@ jit_get_memory_functions(jit_alloc_func_ptr *alloc_ptr,
+     *free_ptr = jit_free_ptr;
+ }
+ 
++/* time spent here (PowerPC timebase ticks), calls and bytes cleared, for the
++ * front end's slow-frame log (all threads together) */
++unsigned long long jit_mem_ticks, jit_mem_bytes;
++unsigned int jit_mem_calls;
++#if defined(__powerpc__) || defined(__ppc__) || defined(__PPC__)
++#  define JIT_MEM_T0()	unsigned long long _t0 = __builtin_ppc_get_timebase()
++#  define JIT_MEM_T1()	__atomic_fetch_add(&jit_mem_ticks, __builtin_ppc_get_timebase() - _t0, __ATOMIC_RELAXED)
++#else
++#  define JIT_MEM_T0()	do { } while (0)
++#  define JIT_MEM_T1()	do { } while (0)
++#endif
++
+ void
+ jit_alloc(jit_pointer_t *ptr, jit_word_t size)
+ {
++    JIT_MEM_T0();
+     *ptr = (*jit_alloc_ptr)(size);
+     memset(*ptr, 0, size);
++    JIT_MEM_T1();
++    __atomic_fetch_add(&jit_mem_calls, 1, __ATOMIC_RELAXED);
++    __atomic_fetch_add(&jit_mem_bytes, size, __ATOMIC_RELAXED);
+ }
+ 
+ void
+ jit_realloc(jit_pointer_t *ptr, jit_word_t old_size, jit_word_t new_size)
+ {
++    JIT_MEM_T0();
+     *ptr = (*jit_realloc_ptr)(*ptr, new_size);
+     if (old_size < new_size)
+ 	memset((jit_int8_t*)*ptr + old_size, 0, new_size - old_size);
++    JIT_MEM_T1();
++    __atomic_fetch_add(&jit_mem_calls, 1, __ATOMIC_RELAXED);
+ }
+ 
+ void
+ jit_free(jit_pointer_t *ptr)
+ {
+     if (*ptr) {
++	JIT_MEM_T0();
+ 	(*jit_free_ptr)(*ptr);
+ 	*ptr = NULL;
++	JIT_MEM_T1();
++	__atomic_fetch_add(&jit_mem_calls, 1, __ATOMIC_RELAXED);
+     }
+ }
+ 
+diff --git a/deps/lightrec/lightrec-private.h b/deps/lightrec/lightrec-private.h
+index bac257b9..3904ef66 100644
+--- a/deps/lightrec/lightrec-private.h
++++ b/deps/lightrec/lightrec-private.h
+@@ -232,6 +232,11 @@ struct lightrec_dbg {
+ 	volatile u32 n_add_fast, n_add_slow;
+ 	/* code LUT entries written by the dispatcher (threaded compiler): were empty, were stale */
+ 	volatile u32 n_relink_null, n_relink_stale;
++	/* compile stages (timebase ticks, compiling thread): setup, building
++	   Lightning's code, Lightning's optimizer, emitting, the rest (LUT,
++	   reaper, cleanup); instructions compiled */
++	volatile u64 t_cstage[5];
++	volatile u32 n_comp_ops;
+ };
+ static inline u64 lightrec_ticks(void)
+ {
+diff --git a/deps/lightrec/lightrec.c b/deps/lightrec/lightrec.c
+index f6220d31..1eede290 100644
+--- a/deps/lightrec/lightrec.c
++++ b/deps/lightrec/lightrec.c
+@@ -139,6 +139,11 @@ void lightrec_debug_counts(u32 *c, u64 *t)
+ 	c[6] = lightrec_dbg.n_relink_null;
+ 	c[7] = lightrec_dbg.n_relink_stale;
+ 	c[8] = lightrec_dbg.n_loop;
++	c[9] = lightrec_dbg.n_comp_ops;
++	t[8] = lightrec_dbg.t_cstage[0];
++	t[9] = lightrec_dbg.t_cstage[1];
++	t[10] = lightrec_dbg.t_cstage[2];
++	t[11] = lightrec_dbg.t_cstage[3];
+ }
+ 
+ unsigned int lightrec_bad_accesses;
+@@ -1012,7 +1017,9 @@ static void * lightrec_emit_code(struct lightrec_state *state,
+ 	jit_word_t code_size, new_code_size;
+ 	void *code;
+ 
++	u64 t_r = lightrec_ticks();
+ 	jit_realize();
++	lightrec_dbg.t_cstage[2] += lightrec_ticks() - t_r;
+ 
+ 	if (ENABLE_DISASSEMBLER)
+ 		jit_set_data(lightning_code_data, sizeof(lightning_code_data), 0);
+@@ -1753,6 +1760,7 @@ static int lightrec_compile_block_(struct lightrec_cstate *cstate,
+ {
+ 	struct block *dead_blocks[ARRAY_SIZE(cstate->targets)];
+ 	u32 was_dead[ARRAY_SIZE(cstate->targets) / 8];
++	u64 t_stage = lightrec_ticks(), t_now, t_real0;
+ 	struct lightrec_state *state = cstate->state;
+ 	struct lightrec_branch_target *target;
+ 	bool fully_tagged = false;
+@@ -1814,6 +1822,11 @@ static int lightrec_compile_block_(struct lightrec_cstate *cstate,
+ 		lightrec_free_reg(cstate->reg_cache, tmp);
+ 	}
+ 
++	t_now = lightrec_ticks();
++	lightrec_dbg.t_cstage[0] += t_now - t_stage;
++	t_stage = t_now;
++	lightrec_dbg.n_comp_ops += block->nb_ops;
++
+ 	for (i = 0; i < block->nb_ops; i++) {
+ 		elm = &block->opcode_list[i];
+ 
+@@ -1869,7 +1882,17 @@ static int lightrec_compile_block_(struct lightrec_cstate *cstate,
+ 	jit_ret();
+ 	jit_epilog();
+ 
++	t_now = lightrec_ticks();
++	lightrec_dbg.t_cstage[1] += t_now - t_stage;
++	t_real0 = lightrec_dbg.t_cstage[2];
++	t_stage = t_now;
++
+ 	new_fn = lightrec_emit_code(state, block, _jit, &block->code_size);
++
++	/* emitting: lightrec_emit_code() less Lightning's optimizer */
++	t_now = lightrec_ticks();
++	lightrec_dbg.t_cstage[3] += t_now - t_stage - (lightrec_dbg.t_cstage[2] - t_real0);
++	t_stage = t_now;
+ 	if (!new_fn) {
+ 		if (!ENABLE_THREADED_COMPILER)
+ 			pr_err("Unable to compile block!\n");
+-- 
+2.43.0
+

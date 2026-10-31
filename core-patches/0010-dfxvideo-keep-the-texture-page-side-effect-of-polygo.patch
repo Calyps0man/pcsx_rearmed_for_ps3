@@ -1,0 +1,34 @@
+From c3527ee561ec6d31e685a1373576d2d1cfeed7e4 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 20:41:15 +0000
+Subject: [PATCH] dfxvideo: keep the texture-page side effect of polygons the
+ front end draws
+
+With gpu_frontend_hooks.cmd drawing a textured polygon, the software
+handler (and its UpdateGlobalTP) did not run, so GPUSTAT bits 0-8 and the
+state E1 syncs start from went stale.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HyAyv1PvGqyTegufofF5fp
+---
+ plugins/dfxvideo/gpulib_if.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/plugins/dfxvideo/gpulib_if.c b/plugins/dfxvideo/gpulib_if.c
+index b06c05ed..ba2de52d 100644
+--- a/plugins/dfxvideo/gpulib_if.c
++++ b/plugins/dfxvideo/gpulib_if.c
+@@ -333,6 +333,10 @@ int renderer_do_cmd_list(uint32_t *list, int list_len, uint32_t *ex_regs,
+     if (!(gpu_frontend_hooks.cmd && (cmd == 0x02 || (cmd >= 0x20 && cmd < 0x80) || (cmd >= 0xe1 && cmd <= 0xe6))
+           && gpu_frontend_hooks.cmd(list, list_end) && cmd < 0x80))
+       primTableJ[cmd]((void *)list);
++    else if ((cmd & 0xe4) == 0x24)
++      /* textured polygon drawn by the front end: keep its texture-page side effect
++         (GPUSTAT bits 0-8, the state later sprites and E1 syncs start from) */
++      UpdateGlobalTP((unsigned short)(GETLE32(&list[4 + ((cmd >> 4) & 1)]) >> 16));
+ 
+     switch(cmd)
+     {
+-- 
+2.43.0
+
