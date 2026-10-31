@@ -418,9 +418,11 @@ static int ReadTrack(const u8 *time)
 		return 1;
 
 	ret = cdra_readTrack(time);
-	if (ret == 0)
+	if (ret == 0) {
 		memcpy(cdr.Prev, time, 3);
-	else
+		if (!CdromExeRead && !memcmp(time, CdromExeTime, 3))
+			CdromExeRead = 1;
+	} else
 		log_unhandled("ReadTrack %02d:%02d:%02d ret %d\n",
 			time[0], time[1], time[2], ret);
 	return ret == 0;

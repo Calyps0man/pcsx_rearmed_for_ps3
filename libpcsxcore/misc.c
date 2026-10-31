@@ -530,6 +530,9 @@ int LoadCdromFile(const char *filename, int full, EXE_HEADER *head, u8 *time_bcd
 	return 0;
 }
 
+u8 CdromExeTime[3];
+int CdromExeRead;
+
 int CheckCdrom() {
 	struct iso_directory_record *dir;
 	struct CdrStat stat = { 0, 0, };
@@ -549,6 +552,8 @@ int CheckCdrom() {
 	FreePPFCache();
 	memset(CdromLabel, 0, sizeof(CdromLabel));
 	memset(CdromId, 0, sizeof(CdromId));
+	memset(CdromExeTime, 0, sizeof(CdromExeTime));
+	CdromExeRead = 0;
 	memset(exename, 0, sizeof(exename));
 	Config.PsxRegion = PSX_REGION_US;
 
@@ -623,6 +628,11 @@ int CheckCdrom() {
 		strcpy(CdromId, "SLUS99999");
 	} else
 		return -1;		// SYSTEM.CNF and PSX.EXE not found
+
+	/* where the main executable starts: its first read tells that the BIOS
+	   (booting with its logo) is done and the game is being loaded */
+	memcpy(CdromExeTime, time, 3);
+	CdromExeRead = 0;
 
 	if (CdromId[0] == '\0') {
 		len = strlen(exename);

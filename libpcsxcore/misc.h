@@ -62,6 +62,8 @@ int BiosBootBypass();
 int LoadCdromMainExe(const char *exe_save_path);
 int LoadCdromFile(const char *filename, int full, EXE_HEADER *head, u8 *time_bcd_out);
 int CheckCdrom();
+extern u8 CdromExeTime[3];   /* first sector (binary MSF) of the disc's main executable */
+extern int CdromExeRead;     /* set when that sector was read (see cdrom.c) */
 int CheckResetManualExe();
 int Load(const char *ExePath);
 
