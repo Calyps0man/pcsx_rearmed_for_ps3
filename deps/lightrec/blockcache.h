@@ -7,6 +7,7 @@
 #define __BLOCKCACHE_H__
 
 #include "lightrec.h"
+#include <stdbool.h>
 
 struct blockcache;
 
@@ -22,6 +23,14 @@ struct blockcache * lightrec_blockcache_init(struct lightrec_state *state);
 void lightrec_free_block_cache(struct blockcache *cache);
 
 void lightrec_free_all_blocks(struct blockcache *cache);
+
+/* code cache (see struct block) */
+void lightrec_stash_block(struct blockcache *cache, struct block *block);
+struct block * lightrec_stash_take(struct blockcache *cache, u32 pc,
+				   const u32 *code);
+bool lightrec_stash_clear(struct blockcache *cache);
+void lightrec_register_block_keep_lut(struct blockcache *cache,
+				      struct block *block);
 void lightrec_free_all_blocks_except(struct blockcache *cache,
 				     const struct block *except);
 

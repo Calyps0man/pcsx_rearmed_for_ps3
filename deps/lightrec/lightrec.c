@@ -39,6 +39,9 @@ static void lightrec_mtc2(struct lightrec_state *state, u8 reg, u32 data);
 static u32 lightrec_mfc2(struct lightrec_state *state, u8 reg);
 
 static void lightrec_reap_block(struct lightrec_state *state, void *data);
+static void lightrec_retire_block(struct lightrec_state *state, void *data);
+static void lightrec_relink(struct lightrec_state *state, struct block *block,
+			    u32 pc, void *func);
 
 static void lightrec_default_sb(struct lightrec_state *state, u32 opcode,
 				void *host, u32 addr, u32 data)
@@ -140,6 +143,9 @@ void lightrec_debug_counts(u32 *c, u64 *t)
 	c[7] = lightrec_dbg.n_relink_stale;
 	c[8] = lightrec_dbg.n_loop;
 	c[9] = lightrec_dbg.n_comp_ops;
+	c[10] = lightrec_dbg.n_stash_add;
+	c[11] = lightrec_dbg.n_stash_hit;
+	c[12] = lightrec_dbg.n_stash_drop;
 	t[8] = lightrec_dbg.t_cstage[0];
 	t[9] = lightrec_dbg.t_cstage[1];
 	t[10] = lightrec_dbg.t_cstage[2];
@@ -793,16 +799,36 @@ static struct block * lightrec_get_block_(struct lightrec_state *state, u32 pc)
 
 			remove_from_code_lut(state->block_cache, block);
 
+			/* kept with its compiled code, in case this code comes
+			 * back (lightrec_stash_block()) */
 			if (ENABLE_THREADED_COMPILER) {
 				lightrec_reaper_add(state->reaper,
-						    lightrec_reap_block, block);
+						    lightrec_retire_block, block);
 			} else {
 				lightrec_unregister_block(state->block_cache, block);
-				lightrec_free_block(state, block);
+				lightrec_stash_block(state->block_cache, block);
 			}
 		}
 
 		block = NULL;
+	}
+
+	if (!block) {
+		void *host;
+
+		/* the same code was compiled before: take that block back */
+		if (lightrec_get_map(state, &host, kunseg(pc))) {
+			block = lightrec_stash_take(state->block_cache, pc, host);
+			if (block) {
+				block_clear_flags(block, BLOCK_IS_DEAD);
+				lightrec_register_block_keep_lut(state->block_cache, block);
+				if (ENABLE_THREADED_COMPILER)
+					lightrec_relink(state, block, pc, block->function);
+				else
+					lut_write(state, lut_offset(pc), block->function);
+				return block;
+			}
+		}
 	}
 
 	if (!block) {
@@ -1046,12 +1072,17 @@ static void * lightrec_emit_code(struct lightrec_state *state,
 				return NULL;
 			}
 
-			/* Remove outdated blocks, and try again */
-			lightrec_remove_outdated_blocks(state->block_cache, block);
+			/* Drop the code cache's blocks first, then remove
+			 * outdated blocks, and try again */
+			if (lightrec_stash_clear(state->block_cache))
+				code = lightrec_alloc_code(state, (size_t) code_size);
+			if (!code) {
+				lightrec_remove_outdated_blocks(state->block_cache, block);
 
-			pr_debug("Re-try to alloc %zu bytes...\n", code_size);
+				pr_debug("Re-try to alloc %zu bytes...\n", code_size);
 
-			code = lightrec_alloc_code(state, code_size);
+				code = lightrec_alloc_code(state, code_size);
+			}
 			if (!code) {
 				/* The code buffer is full of blocks that are
 				 * still valid (lightrec_block_is_old() rarely
@@ -1158,6 +1189,8 @@ static struct block * generate_wrapper(struct lightrec_state *state)
 
 	block->_jit = _jit;
 	block->opcode_list = NULL;
+	block->code_copy = NULL;
+	block->code_copy_len = 0;
 	block->flags = BLOCK_NO_OPCODE_LIST;
 	block->nb_ops = 0;
 
@@ -1482,6 +1515,8 @@ static struct block * generate_dispatcher(struct lightrec_state *state)
 
 	block->_jit = _jit;
 	block->opcode_list = NULL;
+	block->code_copy = NULL;
+	block->code_copy_len = 0;
 	block->flags = BLOCK_NO_OPCODE_LIST;
 	block->nb_ops = 0;
 
@@ -1623,6 +1658,11 @@ static struct block * lightrec_precompile_block(struct lightrec_state *state,
 	block->code = code;
 	block->next = NULL;
 	block->flags = 0;
+	block->stash_slot = 0;
+	block->code_copy = lightrec_malloc(state, MEM_FOR_MIPS_CODE, length);
+	if (block->code_copy)
+		memcpy(block->code_copy, code, length);
+	block->code_copy_len = block->code_copy ? length / sizeof(u32) : 0;
 #if LIGHTREC_THREADED_BUILT
 	block->queue_requests = 0;
 #endif
@@ -1713,6 +1753,15 @@ static void lightrec_reap_block(struct lightrec_state *state, void *data)
 	pr_debug("Reap dead block at "PC_FMT"\n", block->pc);
 	lightrec_unregister_block(state->block_cache, block);
 	lightrec_free_block(state, block);
+}
+
+/* (reaper: a block whose code was overwritten, see lightrec_get_block_()) */
+static void lightrec_retire_block(struct lightrec_state *state, void *data)
+{
+	struct block *block = data;
+
+	lightrec_unregister_block(state->block_cache, block);
+	lightrec_stash_block(state->block_cache, block);
 }
 
 static void lightrec_reap_jit(struct lightrec_state *state, void *data)
@@ -2130,6 +2179,9 @@ void lightrec_free_block(struct lightrec_state *state, struct block *block)
 		lightrec_free_function(state, block->function);
 		lightrec_unregister(MEM_FOR_CODE, block->code_size);
 	}
+	if (block->code_copy)
+		lightrec_free(state, MEM_FOR_MIPS_CODE,
+			      block->code_copy_len * sizeof(u32), block->code_copy);
 	lightrec_free(state, MEM_FOR_IR, sizeof(*block), block);
 }
 
