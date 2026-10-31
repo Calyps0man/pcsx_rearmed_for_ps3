@@ -52,12 +52,11 @@ its own PSL1GHT front end, built around the PS3's hardware:
 
 ## Requirements
 
-- A PS3 on **custom firmware** (tested on a CECHA00).
+- A PS3 on **custom firmware** (tested on a CECHA00) or HEN.
 - Optional: a PS1 BIOS (see below). Without one, the built-in HLE BIOS is used.
 
-**HEN** is untested. The EBOOT is signed as an NPDRM app with a free licence, which
-HEN accepts, but the dynarec writes its code into the app's own code area. That
-works on CFW. If a game crashes as it starts on HEN, set **CPU** to
+**HEN** CANNOT PLAY FROM DISCS AT THE MOMENT
+
 **Interpreter** (slower).
 
 ## Installing
