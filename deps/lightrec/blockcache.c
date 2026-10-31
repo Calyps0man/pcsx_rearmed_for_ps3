@@ -17,140 +17,10 @@
 /* Must be power of two */
 #define LUT_SIZE 0x4000
 
-/* code cache: blocks retired because their code was overwritten, kept with
- * their compiled code, oldest first. A game that loads the same code again
- * (a racing game's race code after the menus) gets the blocks back without
- * compiling them: a compile costs about 0.3 to 2 ms per block on the PS3. */
-#define STASH_BUCKETS	1024			/* power of two */
-#define STASH_MAX	4096			/* blocks */
-#define STASH_BYTES	(2 * 1024 * 1024)	/* compiled code kept */
-
 struct blockcache {
 	struct lightrec_state *state;
 	struct block * lut[LUT_SIZE];
-	struct block * stash[STASH_BUCKETS];	/* chained through block->next */
-	struct block * stash_ring[STASH_MAX];	/* insertion order, NULL = taken */
-	u32 stash_head, stash_used, stash_count;
-	size_t stash_bytes;
 };
-
-static inline u32 stash_bucket(u32 pc)
-{
-	return (kunseg(pc) >> 2) & (STASH_BUCKETS - 1);
-}
-
-static void stash_unlink(struct blockcache *cache, struct block *block)
-{
-	struct block **p = &cache->stash[stash_bucket(block->pc)];
-
-	for (; *p; p = &(*p)->next) {
-		if (*p == block) {
-			*p = block->next;
-			break;
-		}
-	}
-
-	block->next = NULL;
-	cache->stash_ring[block->stash_slot] = NULL;
-	cache->stash_count--;
-	cache->stash_bytes -= block->code_size;
-}
-
-/* drops the oldest kept block (a slot left empty by a taken one is skipped) */
-static bool stash_drop_oldest(struct blockcache *cache)
-{
-	struct block *block;
-
-	while (cache->stash_used) {
-		block = cache->stash_ring[cache->stash_head];
-		cache->stash_ring[cache->stash_head] = NULL;
-		cache->stash_head = (cache->stash_head + 1) % STASH_MAX;
-		cache->stash_used--;
-
-		if (block) {
-			stash_unlink(cache, block);
-			lightrec_free_block(cache->state, block);
-			lightrec_dbg.n_stash_drop++;
-			return true;
-		}
-	}
-
-	return false;
-}
-
-/* (called on the emulation thread, with the block out of the cache and out of
-   the compile queue) */
-void lightrec_stash_block(struct blockcache *cache, struct block *block)
-{
-	u32 slot;
-
-	if (!block->function || !block->code_copy ||
-	    block_has_flag(block, BLOCK_SHOULD_RECOMPILE | BLOCK_NEVER_COMPILE) ||
-	    block->code_size > STASH_BYTES / 4) {
-		lightrec_free_block(cache->state, block);
-		return;
-	}
-
-	while (cache->stash_used == STASH_MAX ||
-	       (cache->stash_count &&
-		cache->stash_bytes + block->code_size > STASH_BYTES)) {
-		if (!stash_drop_oldest(cache))
-			break;
-	}
-
-	slot = (cache->stash_head + cache->stash_used) % STASH_MAX;
-	cache->stash_ring[slot] = block;
-	cache->stash_used++;
-	block->stash_slot = slot;
-
-	block->next = cache->stash[stash_bucket(block->pc)];
-	cache->stash[stash_bucket(block->pc)] = block;
-	cache->stash_count++;
-	cache->stash_bytes += block->code_size;
-	lightrec_dbg.n_stash_add++;
-}
-
-/* a kept block for this address whose code is exactly what is there now */
-struct block * lightrec_stash_take(struct blockcache *cache, u32 pc,
-				   const u32 *code)
-{
-	struct block *block;
-
-	for (block = cache->stash[stash_bucket(pc)]; block; block = block->next) {
-		if (kunseg(block->pc) != kunseg(pc) || block->pc != pc)
-			continue;
-		if (memcmp(block->code_copy, code,
-			   block->code_copy_len * sizeof(u32)))
-			continue;
-
-		stash_unlink(cache, block);
-		lightrec_dbg.n_stash_hit++;
-		return block;
-	}
-
-	return NULL;
-}
-
-bool lightrec_stash_clear(struct blockcache *cache)
-{
-	unsigned int i;
-	struct block *block, *next;
-	bool any = cache->stash_count != 0;
-
-	for (i = 0; i < STASH_BUCKETS; i++) {
-		for (block = cache->stash[i]; block; block = next) {
-			next = block->next;
-			lightrec_free_block(cache->state, block);
-		}
-		cache->stash[i] = NULL;
-	}
-
-	memset(cache->stash_ring, 0, sizeof(cache->stash_ring));
-	cache->stash_head = cache->stash_used = cache->stash_count = 0;
-	cache->stash_bytes = 0;
-
-	return any;
-}
 
 u16 lightrec_get_lut_entry(const struct block *block)
 {
@@ -212,19 +82,6 @@ void lightrec_register_block(struct blockcache *cache, struct block *block)
 	cache->lut[(pc >> 2) & (LUT_SIZE - 1)] = block;
 
 	remove_from_code_lut(cache, block);
-}
-
-/* (a block taken back from the code cache: its compiled code exists, and
-   entries of other blocks inside its range stay) */
-void lightrec_register_block_keep_lut(struct blockcache *cache,
-				      struct block *block)
-{
-	u32 pc = kunseg(block->pc);
-	struct block *old;
-
-	old = cache->lut[(pc >> 2) & (LUT_SIZE - 1)];
-	block->next = old;
-	cache->lut[(pc >> 2) & (LUT_SIZE - 1)] = block;
 }
 
 void lightrec_unregister_block(struct blockcache *cache, struct block *block)
@@ -305,7 +162,6 @@ void lightrec_remove_outdated_blocks(struct blockcache *cache,
 void lightrec_free_all_blocks_except(struct blockcache *cache,
 				     const struct block *except)
 {
-	lightrec_stash_clear(cache);
 	lightrec_free_blocks(cache, except, true);
 }
 
@@ -316,7 +172,6 @@ void lightrec_free_all_blocks(struct blockcache *cache)
 
 void lightrec_free_block_cache(struct blockcache *cache)
 {
-	lightrec_stash_clear(cache);
 	lightrec_free_all_blocks(cache);
 	lightrec_free(cache->state, MEM_FOR_LIGHTREC, sizeof(*cache), cache);
 }

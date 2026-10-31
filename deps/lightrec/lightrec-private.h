@@ -124,13 +124,6 @@ struct block {
 	u32 hash;
 	u32 precompile_date;
 	unsigned int code_size;
-	/* the MIPS code as it was when the block was made, and its length in
-	   words: a block retired because its code was overwritten is kept with
-	   its compiled code (blockcache.c) and taken back if exactly this code
-	   returns at its address */
-	u32 *code_copy;
-	u32 code_copy_len;
-	u32 stash_slot;
 	u16 nb_ops;
 #if LIGHTREC_THREADED_BUILT
 	/* requests for the block while it waits in the compile queue, counted
@@ -244,8 +237,6 @@ struct lightrec_dbg {
 	   reaper, cleanup); instructions compiled */
 	volatile u64 t_cstage[5];
 	volatile u32 n_comp_ops;
-	/* code cache: blocks kept, taken back (no compile), dropped */
-	volatile u32 n_stash_add, n_stash_hit, n_stash_drop;
 };
 static inline u64 lightrec_ticks(void)
 {

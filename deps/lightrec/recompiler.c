@@ -141,12 +141,8 @@ static void lightrec_flush_code_buffer(struct lightrec_state *state, void *d)
 	 * (lightrec_remove_outdated_blocks() alone rarely frees anything: its age
 	 * test compares against a cycle counter reset at every exit, so the buffer
 	 * stayed full and new blocks were only ever interpreted). */
-	/* the code cache's blocks go first: dropping them may make enough room
-	   (the compile is asked for again when the block is met again) */
-	if (!lightrec_stash_clear(state->block_cache)) {
-		lightrec_free_all_blocks_except(state->block_cache, NULL);
-		lightrec_code_flushes++;
-	}
+	lightrec_free_all_blocks_except(state->block_cache, NULL);
+	lightrec_code_flushes++;
 	rec->must_flush = false;
 }
 
