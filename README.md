@@ -1,4 +1,4 @@
-# UNOFFICIAL PCSX-ReARMed for PS3
+# UNOFFICIAL PCSX-ReARMed Port for PS3
 
 A PlayStation 1 emulator for the PlayStation 3. Version 0.1 (build 72).
 
@@ -11,6 +11,24 @@ its own PSL1GHT front end, built around the PS3's hardware:
   on the GPU.
 - **SPU jobs**: FMV decoding and edge smoothing run on the Cell's SPUs.
 - **PS1 discs** play straight from the console's drive (custom firmware).
+
+[![Game examples](https://img.youtube.com/vi/rMDbHit3Br4/hqdefault.jpg)](https://youtu.be/rMDbHit3Br4)
+
+
+## Notes from the author:
+
+**FULL DISCLOSURE: THIS WAS MADE BY AI 99%. I SPENT TIME DEBUGGING AND TESTING, WHICH I AM GOOD AT. VIBE CODED YOU MIGHT CALL IT, BUT FELT MORE LIKE A FRUSTRATING GRIND TO MAKE IT WORK THE WAY IT SHOULD...**
+
+**EITHER WAYS. MOST FEATURES SHOULD WORK , BUT THERE MAY STILL BE BUGS , FREEZES, SLOWDOWNS AND OTHER ISSUES.  I DO NOT PLAN ON MAINTAINING THIS PROJECT. IT WAS MADE FOR FUN TO TEST AI CAPABILITIES.**
+
+**IT MAY RUN A LOT OF GAMES OR NOT. I DON'T KNOW, YOU WILL HAVE TO FIND OUT FOR YOURSELF. I DO NOT TAKE REQUESTS AND I WILL NOT BE DOING MORE IMPROVEMENTS. SOURCE CODE IS HERE SO YOU ARE FREE TO DO IT YOURSELF.**
+
+## More technical notes:
+
+- **I DID NOT TEST 60 HZ ON PAL GAMES.**
+- **BE CAREFUL WITH VIDEO SKIPPING FEATURE, IT MAY SKIP FMVS IN CUTSCENS TOO**
+- **2 THREADS DOES NOT ALWAYS MEAN GAME WILL RUN BETTER. SOME GAMES MAY RUN SLOWER OR BREAK COMPLETELY**
+
 
 ## Contents
 
@@ -55,9 +73,8 @@ its own PSL1GHT front end, built around the PS3's hardware:
 - A PS3 on **custom firmware** (tested on a CECHA00) or HEN.
 - Optional: a PS1 BIOS (see below). Without one, the built-in HLE BIOS is used.
 
-**HEN** CANNOT PLAY FROM DISCS AT THE MOMENT
-
-**Interpreter** (slower).
+> [!WARNING]
+> **HEN CANNOT PLAY FROM DISCS AT THE MOMENT**
 
 ## Installing
 
@@ -84,7 +101,9 @@ A BIOS improves compatibility. Put `scph5501.bin` (or `scph5500`, `scph5502`,
 512 KB BIOS file there is used too. With a BIOS, **PS1 logo at start** in the
 settings shows the PlayStation logo when a game starts.
 
-## Playing a PS1 disc (CFW ONLY!!! DOES NOT WORK ON HEN)
+## Playing a PS1 disc 
+> [!WARNING]
+> **CFW ONLY!!! DOES NOT WORK ON HEN**
 
 Insert the disc. The first entry of the game list is the drive. It is checked when
 the list opens (Square checks again), and it shows the game's name with a black
