@@ -84,7 +84,7 @@ A BIOS improves compatibility. Put `scph5501.bin` (or `scph5500`, `scph5502`,
 512 KB BIOS file there is used too. With a BIOS, **PS1 logo at start** in the
 settings shows the PlayStation logo when a game starts.
 
-## Playing a PS1 disc
+## Playing a PS1 disc (CFW ONLY!!! DOES NOT WORK ON HEN)
 
 Insert the disc. The first entry of the game list is the drive. It is checked when
 the list opens (Square checks again), and it shows the game's name with a black
