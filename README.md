@@ -1,6 +1,6 @@
 # UNOFFICIAL PCSX-ReARMed Port for PS3
 
-A PlayStation 1 emulator for the PlayStation 3. Version 0.1 (build 72).
+An UNOFFICIAL PlayStation 1 emulator for the PlayStation 3. Version 0.1 (build 72).
 
 It is the [PCSX-ReARMed](https://github.com/libretro/pcsx_rearmed) libretro core with
 its own PSL1GHT front end, built around the PS3's hardware:
