@@ -163,6 +163,59 @@ static void hw_write_word(struct lightrec_state *state,
 	lightrec_transition_from_pcsx(state);
 }
 
+/*
+ * Busy-wait polling of a hardware status register (the BIOS waits for the
+ * vblank and the CD-ROM like this while it shows its logo, some games too):
+ * each read is a call out of the recompiled code, and on a slow host (the PS3's
+ * PPU) tens of thousands of them per frame took most of the frame. When the
+ * same register is read again with the same value after the same number of
+ * cycles as the time before, the CPU is in such a loop: time moves on by that
+ * many cycles per read, without running the loop, until the value changes or
+ * the next event is due. Only registers whose reads change nothing.
+ */
+unsigned int lightrec_poll_skips, lightrec_poll_addr;
+
+static bool poll_safe(u32 mem)
+{
+	switch (mem & 0x1fffffff) {
+	case 0x1f801070: case 0x1f801074:   /* interrupt status / mask */
+	case 0x1f801044:                    /* pad/memory card status */
+	case 0x1f801800: case 0x1f801803:   /* CD-ROM status, interrupt enable/flags */
+	case 0x1f801814:                    /* GPU status */
+	case 0x1f8010f0: case 0x1f8010f4:   /* DMA control, DMA interrupts */
+		return true;
+	}
+	/* DMA channel control (the busy bit): 0x1f801088 + 0x10 * channel */
+	return (mem & 0x1fffff8f) == 0x1f801088 && ((mem >> 4) & 0xf) >= 8 && ((mem >> 4) & 0xf) <= 0xe;
+}
+
+static u32 poll_skip(u32 mem, u32 val, int size)
+{
+	static u32 last_mem, last_val, c1, c2;
+	static int last_size;
+	u32 diff = psxRegs.cycle - c1;
+
+	if (mem == last_mem && size == last_size && val == last_val
+	    && diff > 0 && diff < 256 && diff == c1 - c2 && poll_safe(mem)) {
+		u32 n = 0;
+		while ((s32)(psxRegs.next_interupt - psxRegs.cycle) > (s32)diff && val == last_val) {
+			psxRegs.cycle += diff;
+			val = size == 4 ? psxHwRead32(&psxRegs, mem)
+			    : size == 2 ? psxHwRead16(&psxRegs, mem)
+			    : psxHwRead8(&psxRegs, mem);
+			n++;
+		}
+		if (n) {
+			lightrec_poll_skips += n;
+			lightrec_poll_addr = mem;
+		}
+	}
+
+	c2 = c1; c1 = psxRegs.cycle;
+	last_mem = mem; last_val = val; last_size = size;
+	return val;
+}
+
 static u8 hw_read_byte(struct lightrec_state *state, u32 op, void *host, u32 mem)
 {
 	u8 val;
@@ -170,6 +223,7 @@ static u8 hw_read_byte(struct lightrec_state *state, u32 op, void *host, u32 mem
 	lightrec_transition_to_pcsx(state);
 
 	val = psxHwRead8(&psxRegs, mem);
+	val = poll_skip(mem, val, 1);
 
 	lightrec_transition_from_pcsx(state);
 
@@ -184,6 +238,7 @@ static u16 hw_read_half(struct lightrec_state *state,
 	lightrec_transition_to_pcsx(state);
 
 	val = psxHwRead16(&psxRegs, mem);
+	val = poll_skip(mem, val, 2);
 
 	lightrec_transition_from_pcsx(state);
 
@@ -193,29 +248,12 @@ static u16 hw_read_half(struct lightrec_state *state,
 static u32 hw_read_word(struct lightrec_state *state,
 			u32 op, void *host, u32 mem)
 {
-	static u32 old_cycle, oldold_cycle, old_gpusr;
-	u32 val, diff;
+	u32 val;
 
 	lightrec_transition_to_pcsx(state);
 
 	val = psxHwRead32(&psxRegs, mem);
-
-	if (GPUSTATUS_POLLING_THRESHOLD > 0 && mem == 0x1f801814) {
-		diff = psxRegs.cycle - old_cycle;
-
-		if (diff > 0
-		    && diff < GPUSTATUS_POLLING_THRESHOLD
-		    && diff == old_cycle - oldold_cycle) {
-			while (psxRegs.next_interupt > psxRegs.cycle && val == old_gpusr) {
-				psxRegs.cycle += diff;
-				val = psxHwRead32(&psxRegs, mem);
-			}
-		}
-
-		oldold_cycle = old_cycle;
-		old_cycle = psxRegs.cycle;
-		old_gpusr = val;
-	}
+	val = poll_skip(mem, val, 4);
 
 	lightrec_transition_from_pcsx(state);
 
