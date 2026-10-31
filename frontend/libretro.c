@@ -1949,6 +1949,8 @@ static void show_enabled_hacks(void)
    }
 }
 
+static void loadPSXBios(void);
+
 bool retro_load_game(const struct retro_game_info *info)
 {
    size_t i;
@@ -2016,6 +2018,9 @@ bool retro_load_game(const struct retro_game_info *info)
    is_exe = (strcasestr(info->path, ".exe") != NULL);
 
    update_variables(false);
+   /* a front end that loads several games in one session: the BIOS files and the
+      boot logo option as they are now (both were read only in retro_init) */
+   loadPSXBios();
 
    if (plugins_opened)
    {

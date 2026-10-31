@@ -907,7 +907,14 @@ static void * get_next_block_func_(struct lightrec_state *state, u32 pc)
 			}
 		}
 
-		if (ENABLE_THREADED_COMPILER && likely(!should_recompile))
+		/* A block to compile again that has no code yet (an opcode got
+		 * tagged while the interpreter ran it) is interpreted too:
+		 * waiting here for the compiler thread spun forever when the
+		 * code buffer was full, as the compiler then waits for the
+		 * reaper to flush it, and the reaper only runs once
+		 * lightrec_execute() returns, which needs the cycles to move. */
+		if (ENABLE_THREADED_COMPILER &&
+		    (likely(!should_recompile) || !block->function))
 			func = lightrec_recompiler_run_first_pass(state, block, &pc);
 		else
 			func = block->function;
@@ -1042,7 +1049,14 @@ static void * lightrec_emit_code(struct lightrec_state *state,
 				/* If we're using the threaded compiler, return
 				 * an allocation error here. The threaded
 				 * compiler will then empty its job queue and
-				 * request a code flush using the reaper. */
+				 * request a code flush using the reaper.
+				 * No code was given to Lightning: mark the
+				 * (empty) code area as ours, or destroying
+				 * the state would munmap(NULL) on systems
+				 * with mmap, unmapping whatever is mapped
+				 * at address 0 (the PS1 RAM, with the
+				 * custom memory map). */
+				jit_set_code(NULL, 0);
 				return NULL;
 			}
 
