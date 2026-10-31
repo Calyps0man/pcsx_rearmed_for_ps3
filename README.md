@@ -10,7 +10,7 @@ its own PSL1GHT front end, built around the PS3's hardware:
 - **RSX renderer**: 3D at 2x, 3x, 4x or 4.5x resolution, with the PS1's VRAM kept
   on the GPU.
 - **SPU jobs**: FMV decoding and edge smoothing run on the Cell's SPUs.
-- **PS1 discs** play straight from the console's drive (custom firmware).
+- **PS1 discs** play straight from the console's drive (ONLY ON CFW!!!).
 
 <a href="https://youtu.be/rMDbHit3Br4">
   <img src="https://img.youtube.com/vi/rMDbHit3Br4/maxresdefault.jpg" alt="Watch gameplay" width="900">
