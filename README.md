@@ -1,4 +1,4 @@
-# PCSX-ReARMed for PS3
+# UNOFFICIAL PCSX-ReARMed for PS3
 
 A PlayStation 1 emulator for the PlayStation 3. Version 0.1 (build 72).
 
