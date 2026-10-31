@@ -12,10 +12,9 @@ its own PSL1GHT front end, built around the PS3's hardware:
 - **SPU jobs**: FMV decoding and edge smoothing run on the Cell's SPUs.
 - **PS1 discs** play straight from the console's drive (custom firmware).
 
-![Features](https://raw.githubusercontent.com/Calyps0man/pcsx_rearmed_for_ps3/ps3/pcsx-rearmed-ps3-features.gif)
-
-[![Game examples](https://img.youtube.com/vi/rMDbHit3Br4/hqdefault.jpg)](https://youtu.be/rMDbHit3Br4)
-
+<a href="https://youtu.be/rMDbHit3Br4">
+  <img src="https://img.youtube.com/vi/rMDbHit3Br4/maxresdefault.jpg" alt="Watch gameplay" width="900">
+</a>
 
 ## Notes from the author:
 
@@ -30,6 +29,11 @@ its own PSL1GHT front end, built around the PS3's hardware:
 - **I DID NOT TEST 60 HZ ON PAL GAMES.**
 - **BE CAREFUL WITH VIDEO SKIPPING FEATURE, IT MAY SKIP FMVS IN CUTSCENS TOO**
 - **2 THREADS DOES NOT ALWAYS MEAN GAME WILL RUN BETTER. SOME GAMES MAY RUN SLOWER OR BREAK COMPLETELY**
+
+## Visual summary
+
+![Features](https://raw.githubusercontent.com/Calyps0man/pcsx_rearmed_for_ps3/ps3/pcsx-rearmed-ps3-features.gif)
+
 
 
 ## Contents
