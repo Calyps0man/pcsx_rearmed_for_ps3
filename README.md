@@ -70,7 +70,7 @@ its own PSL1GHT front end, built around the PS3's hardware:
 
 ## Acknowledgements
 
-- **Some of the above updates were inspired by fendimaharsi0-sketch's "another rearmed emulator" fork. So thank you for improving the project**
+- **Some of the above updates were inspired by fendimaharsi0-sketch's "another rearmed emulator" fork. So thank you for improving the project.**
 
 ## Notes from the author:
 
