@@ -16,6 +16,58 @@ its own PSL1GHT front end, built around the PS3's hardware:
   <img src="https://img.youtube.com/vi/rMDbHit3Br4/maxresdefault.jpg" alt="Watch gameplay" width="900">
 </a>
 
+
+## UPDATE 5.11.2026. Experimental version 0.2 (build 100):
+
+> [!WARNING]
+> **The listed features below may not work perfectly. They are all experimental. Bugs may still happen. Disc changing features was not tested in every game that requires it.**
+
+### New settings and features
+- **PGXP (steadier 3D)** (experimental, RSX renderer, per game, off by default):
+  3D is drawn at sub-pixel positions, so polygons wobble much less when upscaled.
+  "On + textures" also attempts to remove texture warping (perspective-correct textures).
+- **Widescreen (3D)** (per game, off by default): 3D games are drawn wider for a
+  16:9 TV with the right proportions. 2D graphics, menus and videos are stretched.
+  Works with PGXP. While it is on, Aspect ratio is greyed out and set to 16:9.
+- **Texture filter** and **Sprite filter** (experimental, RSX renderer, off by
+  default): bilinear smoothing of 3D textures and of 2D sprites, set separately.
+  Works at every resolution, without dark fringes or seams at sprite edges.
+- **Changing discs** for multi-disc games (in-game menu > Change disc). Uses the
+  game's .m3u or multi-disc .pbp, or files whose names differ only by disc number
+  ("(Disc 2)", "CD2", ...). Works with discs in the PS3's drive too.
+- **CD-ROM speed**: Normal, Turbo (faster loading, sound and videos keep their
+  speed) or Max (fastest, may break some games).
+  The game's serial is shown under the cover.
+- **Boot BIOS in game list** (off by default): adds an entry that starts the PS1
+  BIOS menu with no disc (memory card manager, CD player). You pick which memory
+  card files go in the two slots, so saves can be copied between games' cards.
+  Needs a real BIOS.
+- **Game covers** (on by default): the selected game's cover is shown in the
+  game list, from your own JPG/PNG files: next to the game file, in
+  `USRDIR/covers` (by file name or serial), or from webMAN MOD's PS1 cover pack.
+
+### Speed
+- Rayman is now at full speed now without breaking BIOS logo.
+- Resident Evil 3 should no longer nearly freeze in scenes with many VRAM copies (the
+  RSX now does them itself).
+
+### Graphics fixes
+- Mirrored 2D sprites are drawn correctly: no more thin lines through or along
+  sprites (Rayman), and no hairline gaps between 2D pieces above 1x.
+- Many PGXP fixes along the way: less flicker, reduced gaps and slits between polygons
+  (Tekken 3, GT2's cars, RE3's Jill).
+
+### Menus and logs
+- Debug log: more timing and renderer statistics, to help find slowdowns.
+
+## Known limitations/issues
+
+- **PGXP feature implementation is not perfect. There may still be polygon gaps and other issues depending on the game. Toggling it may also reduce performance**
+- **Widescreen (3D)** is a hack. Objects may pop in at the edges in games that skip what is outside the original 4:3 view.
+- **Gran Turismo 2** in Japanese version on the Convert screen, the names of the saves on the memory
+  card are unreadable with the built-in (HLE) BIOS. The game builds them from the
+  real BIOS's Japanese font. Use a real BIOS (see [Games and BIOS](#games-and-bios)).
+
 ## Notes from the author:
 
 **FULL DISCLOSURE: THIS WAS MADE BY AI 99%. I SPENT TIME DEBUGGING AND TESTING, WHICH I AM GOOD AT. VIBE CODED YOU MIGHT CALL IT, BUT FELT MORE LIKE A FRUSTRATING GRIND TO MAKE IT WORK THE WAY IT SHOULD...**
