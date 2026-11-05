@@ -37,7 +37,6 @@ its own PSL1GHT front end, built around the PS3's hardware:
   ("(Disc 2)", "CD2", ...). Works with discs in the PS3's drive too.
 - **CD-ROM speed**: Normal, Turbo (faster loading, sound and videos keep their
   speed) or Max (fastest, may break some games).
-  The game's serial is shown under the cover.
 - **Boot BIOS in game list** (off by default): adds an entry that starts the PS1
   BIOS menu with no disc (memory card manager, CD player). You pick which memory
   card files go in the two slots, so saves can be copied between games' cards.
@@ -45,6 +44,7 @@ its own PSL1GHT front end, built around the PS3's hardware:
 - **Game covers** (on by default): the selected game's cover is shown in the
   game list, from your own JPG/PNG files: next to the game file, in
   `USRDIR/covers` (by file name or serial), or from webMAN MOD's PS1 cover pack.
+  The game's serial is shown under the cover.
 
 ### Speed
 - Rayman is now at full speed now without breaking BIOS logo.
