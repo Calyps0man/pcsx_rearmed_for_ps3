@@ -17,7 +17,7 @@ its own PSL1GHT front end, built around the PS3's hardware:
 </a>
 
 
-## UPDATE 5.11.2026. Experimental version 0.2 (build 100):
+# UPDATE 5.11.2026. Experimental version 0.2 (build 100):
 
 > [!WARNING]
 > **The listed features below may not work perfectly. They are all experimental. Bugs may still happen. Disc changing features was not tested in every game that requires it.**
