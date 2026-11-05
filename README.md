@@ -68,6 +68,10 @@ its own PSL1GHT front end, built around the PS3's hardware:
   card are unreadable with the built-in (HLE) BIOS. The game builds them from the
   real BIOS's Japanese font. Use a real BIOS (see [Games and BIOS](#games-and-bios)).
 
+## Acknowledgements
+
+- **Some of the above updates were inspired by fendimaharsi0-sketch's "another rearmed emulator" fork. So thank you for improving the project**
+
 ## Notes from the author:
 
 **FULL DISCLOSURE: THIS WAS MADE BY AI 99%. I SPENT TIME DEBUGGING AND TESTING, WHICH I AM GOOD AT. VIBE CODED YOU MIGHT CALL IT, BUT FELT MORE LIKE A FRUSTRATING GRIND TO MAKE IT WORK THE WAY IT SHOULD...**
