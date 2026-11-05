@@ -47,7 +47,7 @@ its own PSL1GHT front end, built around the PS3's hardware:
   The game's serial is shown under the cover.
 
 ### Speed
-- Rayman is now at full speed now without breaking BIOS logo.
+- Rayman is now at full speed now without affecting the BIOS logo. (Both were dependent on each other, it was caused by register checks and emulation issue)
 - Resident Evil 3 should no longer nearly freeze in scenes with many VRAM copies (the
   RSX now does them itself).
 
