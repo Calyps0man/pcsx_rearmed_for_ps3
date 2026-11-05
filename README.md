@@ -20,12 +20,21 @@ its own PSL1GHT front end, built around the PS3's hardware:
 # UPDATE 5.11.2026. Experimental version 0.2 (build 100):
 
 > [!WARNING]
-> **The listed features below may not work perfectly. They are all experimental. Bugs may still happen. Disc changing features was not tested in every game that requires it.**
+> ### The listed features below may not work perfectly. They are all experimental. Bugs may still happen. Disc changing features was not tested in every game that requires it.
 
 ### New settings and features
-- **PGXP (steadier 3D)** (experimental, RSX renderer, per game, off by default):
+- **PGXP (Lite version)** (experimental, RSX renderer, per game, off by default):
   3D is drawn at sub-pixel positions, so polygons wobble much less when upscaled.
-  "On + textures" also attempts to remove texture warping (perspective-correct textures).
+  "On + textures" also attempts to remove texture warping.
+
+> [!NOTE]
+> This is a lighter version of PGXP, made to run fast enough on the PS3. It only covers the
+  PS1's 3D chip (GTE): the exact sub-pixel positions the GTE calculates are kept and
+  used to draw 3D, so polygons wobble much less. "On + textures" also uses the
+  depth for perspective-correct textures. Unlike the full PGXP in DuckStation,
+  there is no CPU mode (positions a game changes  with the main CPU after the GTE fall back to whole pixels),
+  no depth buffer and no culling options. Some wobble and gaps may remain, depending on the game.
+  
 - **Widescreen (3D)** (per game, off by default): 3D games are drawn wider for a
   16:9 TV with the right proportions. 2D graphics, menus and videos are stretched.
   Works with PGXP. While it is on, Aspect ratio is greyed out and set to 16:9.
@@ -70,7 +79,7 @@ its own PSL1GHT front end, built around the PS3's hardware:
 
 ## Acknowledgements
 
-- **Some of the above updates were inspired by fendimaharsi0-sketch's "another rearmed emulator" fork. So thank you for improving the project.**
+- **Many of the above updates were inspired by fendimaharsi0-sketch's "another rearmed emulator" fork. So thank you for improving the project.**
 
 ## Notes from the author:
 
