@@ -64,9 +64,9 @@ its own PSL1GHT front end, built around the PS3's hardware:
 
 - **PGXP feature implementation is not perfect. There may still be polygon gaps and other issues depending on the game. Toggling it may also reduce performance**
 - **Widescreen (3D)** is a hack. Objects may pop in at the edges in games that skip what is outside the original 4:3 view.
-- **Gran Turismo 2** in Japanese version on the Convert screen, the names of the saves on the memory
+- **Gran Turismo 2** - Japanese version has a bug on the Convert screen; the names of the saves on the memory
   card are unreadable with the built-in (HLE) BIOS. The game builds them from the
-  real BIOS's Japanese font. Use a real BIOS (see [Games and BIOS](#games-and-bios)).
+  real BIOS's Japanese font. Use a real BIOS (see [Games and BIOS](#games-and-bios)). This may also happen with other NTSC-J games. 
 
 ## Acknowledgements
 
