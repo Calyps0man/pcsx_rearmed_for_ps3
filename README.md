@@ -28,7 +28,7 @@ its own PSL1GHT front end, built around the PS3's hardware:
   `USRDIR/system`. Can be set per game; applies from the next game start.
 - **PGXP seam fill** (under PGXP): closes the thin cracks between parts of 3D models
   (faces, necks, shoulders, e.g. Jill in Resident Evil 3). Options: 1/2 pixel
-  (default), 1/4 pixel, Off. **DO NOT USE THIS SETTING FOR SILENT HILL. IT WILL GLITCH THE GRAPHICS!!!**
+  (default), 1/4 pixel, Off.
 
 ### Changed
 - **Skip intro videos** now only skips the videos before your first button press
@@ -46,7 +46,7 @@ its own PSL1GHT front end, built around the PS3's hardware:
 
 ### Known issues
 - 007 The World Is Not Enough needs a real BIOS (it crashes with the built-in one).
-
+- PGXP Seam Fill can glitch graphics in some games (e.g Silent Hill). Turn it off if that happens.
 
 # UPDATE 5.11.2026. Experimental version 0.2 (build 100):
 
