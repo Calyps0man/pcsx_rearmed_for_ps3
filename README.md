@@ -17,6 +17,37 @@ its own PSL1GHT front end, built around the PS3's hardware:
 </a>
 
 
+# UPDATE 8.11.2026. Experimental version 0.2 (build 105):
+
+### New
+- **Settings in categories**: the settings screen now has two panes, with categories
+  on the left (Display, Graphics, Emulation, Sound, Controls, BIOS, Game list, Debug)
+  and their settings on the right. X opens a category, Circle goes back, L1/R1
+  switches between categories. No more long scrolling list.
+- **BIOS choice** (BIOS category): Auto, Built-in (HLE), or any BIOS file in
+  `USRDIR/system`. Can be set per game; applies from the next game start.
+- **PGXP seam fill** (under PGXP): closes the thin cracks between parts of 3D models
+  (faces, necks, shoulders, e.g. Jill in Resident Evil 3). Options: 1/2 pixel
+  (default), 1/4 pixel, Off.
+
+### Changed
+- **Skip intro videos** now only skips the videos before your first button press
+  (logos, opening movie). Story videos and cutscenes always play.
+- **Sound when slow** now defaults to Keep pitch.
+- The game list now shows `.img` files without a `.cue`, and `.mdf` images.
+
+### Fixes
+- **Mortal Kombat Trilogy**: no longer freezes after the intro videos, and no longer
+  crashes while loading on the PS3. Two dynarec bugs, one of them in upstream's
+  Lightrec on big-endian 64-bit CPUs like the PS3's.
+- **007 The World Is Not Enough**: no longer hangs or crashes while loading with the
+  dynarec (an upstream Lightrec bug).
+- **Resident Evil 3**: no more black screen when picking up an item.
+
+### Known issues
+- 007 The World Is Not Enough needs a real BIOS (it crashes with the built-in one).
+
+
 # UPDATE 5.11.2026. Experimental version 0.2 (build 100):
 
 > [!WARNING]
