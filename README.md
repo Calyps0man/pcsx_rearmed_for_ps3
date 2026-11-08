@@ -28,7 +28,7 @@ its own PSL1GHT front end, built around the PS3's hardware:
   `USRDIR/system`. Can be set per game; applies from the next game start.
 - **PGXP seam fill** (under PGXP): closes the thin cracks between parts of 3D models
   (faces, necks, shoulders, e.g. Jill in Resident Evil 3). Options: 1/2 pixel
-  (default), 1/4 pixel, Off.
+  (default), 1/4 pixel, Off. THIS SETTING NEEDS TO BE TURNED OFF FOR SILENT HILL.
 
 ### Changed
 - **Skip intro videos** now only skips the videos before your first button press
