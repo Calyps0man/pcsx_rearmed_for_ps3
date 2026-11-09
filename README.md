@@ -1,6 +1,6 @@
 # UNOFFICIAL PCSX-ReARMed Port for PS3
 
-A PlayStation 1 emulator for the PlayStation 3. Version 0.1 (build 72).
+A PlayStation 1 emulator for the PlayStation 3.
 
 It is the [PCSX-ReARMed](https://github.com/libretro/pcsx_rearmed) libretro core with
 its own PSL1GHT front end, built around the PS3's hardware:
@@ -201,7 +201,7 @@ Put games in any of these folders:
 Formats: `.cue`/`.bin`, `.chd`, `.pbp`, `.iso`, `.m3u` (multi-disc games).
 
 A BIOS improves compatibility. Put `scph5501.bin` (or `scph5500`, `scph5502`,
-`scph101`, `scph7001`, `scph1001`, `psxonpsp660`) in `USRDIR/system`. Any other
+`scph101`, `scph7001`, `scph1001`) in `USRDIR/system`. Any other
 512 KB BIOS file there is used too. With a BIOS, **PS1 logo at start** in the
 settings shows the PlayStation logo when a game starts.
 
