@@ -17,6 +17,49 @@ its own PSL1GHT front end, built around the PS3's hardware:
 </a>
 
 
+# UPDATE 10.11.2026. Experimental  Version 0.3 (build 118):
+
+## Menus and settings
+
+- **New menu layout**
+  - Two tabs in the header, **Game list** and **Settings**, switched with L1/R1.
+    Triangle no longer opens the settings.
+  - L2/R2 page the game list and switch settings categories (in the Settings
+    tab, in game and in a game's config).
+  - The game list marks games that have their own config.
+- **A game's config**
+  - Triangle on a game opens its config menu: **Show / edit config** and
+    **Delete config** if the game has one, else **Create config** (a copy of the
+    current settings).
+  - Show / edit config opens the game's settings; changes are saved to the
+    game's config when you leave.
+- **Settings > Manage**
+  - Reset all settings to default.
+  - Load settings from a game's config.
+  - Save settings to a game's config.
+- **In-game menu**: the "Own settings for this game" toggle is
+  gone. In-game Settings change the game's config if it has one, else the
+  settings for all games.
+- **The PS3's own PS1 BIOS**: `/dev_flash/ps1emu/ps1_rom.bin`,
+  part of the PS3's system software, can be chosen in Settings > BIOS. **Auto**
+  now prefers it, then a BIOS in `USRDIR/system`, then the built-in HLE BIOS.
+- **Low latency** (Settings > Display, off by default, per
+  game): the controller is read only once the last frame is on screen, so a button
+  press shows about one frame sooner. Each frame then has to be emulated and
+  drawn within one TV refresh. When a game is too heavy for that, it steps
+  aside (normal latency, no speed lost) until the frames are short enough again.
+- **PGXP seam fill** is greyed out while PGXP is off.
+
+## Graphics fixes
+
+- **The X-Files, RSX renderer**
+  - The cursor was a box of noise. The game picks single bytes of its 24-bit
+    picture with quads that span 4 texels per pixel, and the RSX sampled two
+    texels past the one the PS1 takes. Minified textures are now sampled in the
+    middle of the texel the PS1 takes.
+
+
+
 # UPDATE 8.11.2026. Experimental version 0.2 (build 105):
 
 ### New
