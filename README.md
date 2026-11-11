@@ -48,7 +48,7 @@ its own PSL1GHT front end, built around the PS3's hardware:
 
 ## LibCrypt-protected games
 
-- **LibCrypt warning**: a message at game start when a LibCrypt-protected PAL
+- **LibCrypt warning**: a message at game start when a LibCrypt-protected
   game (Soul Reaver, MediEvil, ...) has no protection data: no `.sbi` or
   `.lsd` file, and not an original disc in the drive. Without it the game
   freezes later on. See the README's "LibCrypt-protected games".
