@@ -17,6 +17,67 @@ its own PSL1GHT front end, built around the PS3's hardware:
 </a>
 
 
+# UPDATE 11.11.2026. Version 0.4
+
+## Name
+
+- The app is now called **PSXONPS3** (it was PCSX-ReARMed for PS3), with a new
+  icon. It installs over the old one and keeps saves, states and settings.
+
+## Save states
+
+- **Save state** and **Load state** show the 10 slots as pictures of the game at
+  that moment, with the game's name and the time each was saved.
+
+## Memory cards
+
+- **Memory card 1 and 2 for all games** by default: all games use the same two cards
+  (`saves/pcsx-card1.mcd`, `pcsx-card2.mcd`), as on a PS1, so games find each
+  other's saves. Settings > Memory cards > One per game keeps a card per game
+  (also per game, in its config).
+- A game's old card from earlier builds is copied onto memory card 1 (and 2) once, the
+  first time it starts with them; its own card file stays as it was.
+- **More memory cards**: memory card 3, 4, ... (New memory card in the tab), and
+  which two are in the slots (Put in slot 1 / 2), for all games.
+- **Memory cards tab**: every card file and the saves on it, with their animated
+  icons, names and blocks. Copy or move a save to another card, delete it, export
+  it as an `.mcs` file, or import `.mcs` files from `USRDIR/saves/mcs`.
+- **Boot BIOS** needs a BIOS file from a PS1 in `USRDIR/system`: the PS3's own
+  PS1 BIOS has no memory card or CD player screen (a black screen), so with only
+  that one the entry is greyed out and says so.
+
+## LibCrypt-protected games
+
+- **LibCrypt warning**: a message at game start when a LibCrypt-protected PAL
+  game (Soul Reaver, MediEvil, ...) has no `.sbi` file next to it, as it will
+  freeze later on. See the README's "LibCrypt-protected games".
+- **LibCrypt data from .lsd files**: next to the game, or webMAN MOD's pack in
+  `/dev_hdd0/tmp/lsd` (named as the boot file: `SLES_013.01.lsd`), for images
+  and discs in the drive.
+- **Original discs in the PS3's drive**: the protection data is now read from the
+  disc itself. Not yet confirmed with a real LibCrypt disc.
+
+## Fixes
+
+- A `.cue` that names its `.bin` in other case (`GAME.BIN` for `game.bin`) now
+  loads properly; before, a LibCrypt game's `.sbi` was turned away there.
+
+## Speed
+
+- Games no longer slow down after a save state was made, or after reading video
+  memory once (Soul Reaver ran at 70-80%): the exact-read mode for the X-Files
+  now starts only while a game itself keeps reading video memory, and stops
+  again 10 seconds after its last read.
+
+## Graphics fixes
+
+- **PGXP seam fill**: no more grid of light or dark lines along the polygon
+  edges in games that draw a see-through layer over their polygons (Silent
+  Hill's fog, Soul Reaver, GT2), and no light outline around GT2's tyres.
+  Edges two polygons share now stay where they are, and only textured
+  polygons are drawn larger.
+
+
 # UPDATE 10.11.2026. Experimental  Version 0.3 (build 118):
 
 ## Menus and settings
