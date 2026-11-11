@@ -54,7 +54,7 @@ its own PSL1GHT front end, built around the PS3's hardware:
 - **LibCrypt data from .lsd files**: next to the game, or webMAN MOD's pack in
   `/dev_hdd0/tmp/lsd` (named as the boot file: `SLES_013.01.lsd`), for images
   and discs in the drive.
-- **Original discs in the PS3's drive**: the protection data is now read from the
+- **Original discs in the PS3's drive**: the protection data is now attempted to be read from the
   disc itself. Not yet confirmed with a real LibCrypt disc.
 
 ## Fixes
