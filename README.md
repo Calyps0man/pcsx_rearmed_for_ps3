@@ -49,9 +49,10 @@ its own PSL1GHT front end, built around the PS3's hardware:
 ## LibCrypt-protected games
 
 - **LibCrypt warning**: a message at game start when a LibCrypt-protected PAL
-  game (Soul Reaver, MediEvil, ...) has no `.sbi` file next to it, as it will
-  freeze later on. See the README's "LibCrypt-protected games".
-- **LibCrypt data from .lsd files**: next to the game, or webMAN MOD's pack in
+  game (Soul Reaver, MediEvil, ...) has no protection data: no `.sbi` or
+  `.lsd` file, and not an original disc in the drive. Without it the game
+  freezes later on. See the README's "LibCrypt-protected games".
+- **LibCrypt data from .lsd files**: emulator also looks for .lsd next to the game, or webMAN MOD's pack in
   `/dev_hdd0/tmp/lsd` (named as the boot file: `SLES_013.01.lsd`), for images
   and discs in the drive.
 - **Original discs in the PS3's drive**: the protection data is now attempted to be read from the
@@ -68,6 +69,9 @@ its own PSL1GHT front end, built around the PS3's hardware:
   memory once (Soul Reaver ran at 70-80%): the exact-read mode for the X-Files
   now starts only while a game itself keeps reading video memory, and stops
   again 10 seconds after its last read.
+- **PGXP seam fill** takes less CPU time per polygon (it cost about 2.7 ms
+  per frame in Tekken 3). The Debug log shows its time on its own ("seam
+  fill" in the PGXP line).
 
 ## Graphics fixes
 
