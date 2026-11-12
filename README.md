@@ -1,4 +1,4 @@
-# UNOFFICIAL PCSX-ReARMed (Renamed PSXONPS3 Since 0.4) Port for PS3
+# UNOFFICIAL PCSX-ReARMed (PSXONPS3 Since 0.4) Port for PS3
 
 A PlayStation 1 emulator for the PlayStation 3.
 
