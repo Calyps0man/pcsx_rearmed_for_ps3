@@ -1,10 +1,44 @@
 /* plain texture copy; filtering comes from the sampler state. DITHER: with the
-   PS1 dither pattern (dither.h) */
+   PS1 dither pattern (dither.h). SHARP: sharp bilinear (the sampler is bilinear):
+   each source pixel stays a flat square on the screen and only the screen pixel
+   on the edge between two of them is blended, so non-integer scaling neither
+   blurs like bilinear nor gives uneven pixel sizes like nearest */
 #ifndef DITHER
 #define DITHER 0
 #endif
+#ifndef SHARP
+#define SHARP 0
+#endif
 #if DITHER
 #include "dither.h"
+#endif
+#if SHARP
+/* texel: the size of one source pixel in texture coordinates */
+float4 sharp(sampler2D tex, float2 uv, float2 texel)
+{
+    float2 p = uv / texel;                                   /* source pixels */
+    /* screen pixels per source pixel, from the screen-space derivatives; at least 1
+       (shrunk pictures: plain bilinear) */
+    float2 sc = max(1.0f / max(abs(ddx(p)) + abs(ddy(p)), float2(1.0f / 64.0f, 1.0f / 64.0f)), float2(1.0f, 1.0f));
+    float2 fl = floor(p), c = p - fl - 0.5f;                 /* from the pixel's centre, -0.5..0.5 */
+    float2 r = 0.5f - 0.5f / sc;                             /* the flat part, each side of the centre */
+    /* inside the flat part: the centre (one source pixel); in the last screen pixel
+       before the edge: a ramp through the bilinear sampler's blend */
+    float2 f = (c - clamp(c, -r, r)) * sc + 0.5f;
+    return tex2D(tex, (fl + f) * texel);
+}
+#if DITHER
+half4 main(float2 uv : TEXCOORD0, float2 texel : TEXCOORD1, float2 native : TEXCOORD4, uniform sampler2D tex) : COLOR
+{
+    return dither5((half4)sharp(tex, uv, texel), native);
+}
+#else
+float4 main(float2 uv : TEXCOORD0, float2 texel : TEXCOORD1, uniform sampler2D tex) : COLOR
+{
+    return sharp(tex, uv, texel);
+}
+#endif
+#elif DITHER
 half4 main(float2 uv : TEXCOORD0, float2 native : TEXCOORD4, uniform sampler2D tex) : COLOR
 {
     return dither5(h4tex2D(tex, uv), native);

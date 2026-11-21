@@ -33,7 +33,10 @@ void watchdog_start(void);
 void watchdog_frame(void);      /* called once per presented frame */
 
 /* ---- config.c ---- */
-enum { FILTER_SHARP = 0, FILTER_SMOOTH, FILTER_FXAA, FILTER_FXAA_SPU, FILTER_COUNT };
+enum { FILTER_SHARP = 0, FILTER_SMOOTH, FILTER_FXAA, FILTER_FXAA_SPU, FILTER_SHARP_BILINEAR, FILTER_COUNT };   /* settings files: append only */
+/* how the RSX renderer samples PS1 textures in the upscaled picture (stored in the
+   settings files: append only) */
+enum { TEXF_NEAREST = 0, TEXF_BILINEAR, TEXF_SHARP_BILINEAR, TEXF_COUNT };
 /* picture shape on the TV; the zoom modes keep the 4:3 proportions and crop the
    top and bottom instead (values are stored in settings.txt: append only) */
 enum { ASPECT_4_3 = 0, ASPECT_FULL, ASPECT_14_9, ASPECT_ZOOM_14_9, ASPECT_ZOOM, ASPECT_COUNT };
@@ -42,6 +45,8 @@ typedef struct {
     int dynarec_thread; /* Lightrec compiles new code on the PPU's second thread */
     int gpu_scale;      /* 0 = software renderer, 2..4 = RSX renderer at that scale, 5 = 4x wide, 4.5x tall */
     int filter;         /* FILTER_* */
+    int tex_filter;     /* TEXF_*: textures of polygons (RSX renderer at 2x and more) */
+    int sprite_filter;  /* TEXF_*: textures of sprites (rectangle commands) */
     int aspect;         /* ASPECT_* */
     int frameskip;      /* 0 off, 1 auto */
     int dithering;

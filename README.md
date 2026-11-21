@@ -176,8 +176,9 @@ its own PSL1GHT front end, built around the PS3's hardware:
   16:9 TV with the right proportions. 2D graphics, menus and videos are stretched.
   Works with PGXP. While it is on, Aspect ratio is greyed out and set to 16:9.
 - **Texture filter** and **Sprite filter** (experimental, RSX renderer, off by
-  default): bilinear smoothing of 3D textures and of 2D sprites, set separately.
-  Works at every resolution, without dark fringes or seams at sprite edges.
+  default): bilinear or sharp bilinear smoothing of textures and of sprites, set
+  separately. Sharp bilinear keeps the middle of every texel flat and smooths only the
+  steps between them. No dark fringes or seams at sprite edges.
 - **Changing discs** for multi-disc games (in-game menu > Change disc). Uses the
   game's .m3u or multi-disc .pbp, or files whose names differ only by disc number
   ("(Disc 2)", "CD2", ...). Works with discs in the PS3's drive too.
@@ -268,7 +269,7 @@ its own PSL1GHT front end, built around the PS3's hardware:
   does, including semi-transparency, texture windows, the mask bit and dithering.
 - High-resolution menus (480-line pictures) are drawn only as large as the TV can
   show, so they stay fast at 4x.
-- Picture filters: sharp, bilinear, FXAA on the RSX, or edge smoothing on the SPUs.
+- Picture filters: sharp, sharp bilinear, bilinear, FXAA on the RSX, or edge smoothing on the SPUs.
 - 10 save-state slots per game, with the time each was saved.
 - Per-game settings, kept in their own file.
 - Skip intro videos: presses Start/X during a game's opening videos, and
@@ -371,7 +372,9 @@ The in-game menu has these entries:
 |---|---|---|
 | CPU | Dynarec, 2 threads, **Dynarec, 1 thread**, Interpreter | 2 threads (experimental, can freeze some games): new game code is translated on the PPU's second thread while the game goes on more slowly. Interpreter only for games that misbehave. |
 | Renderer | **RSX 2x**, 3x, 4x, 4.5x, Software (native), RSX 1x (native, drawn by the RSX) | In game, it shows the resolution actually drawn. |
-| Picture filter | **Smoothing on SPUs**, Sharp (nearest), Smooth (bilinear), FXAA (RSX) | |
+| Picture filter | **Smoothing on SPUs**, Sharp (nearest), Sharp bilinear, Smooth (bilinear), FXAA (RSX) | Sharp bilinear keeps every pixel a crisp square of the same size and only smooths the edges between them: best with RSX 1x, Software, or 2x. |
+| Texture filter | **Nearest**, Bilinear, Sharp bilinear | Textures of 3D polygons, in the upscaled picture. RSX 2x or more. Bilinear blurs; Sharp bilinear keeps texels square and only smooths their edges. Costs RSX time. |
+| Sprite filter | **Nearest**, Bilinear, Sharp bilinear | The same for sprites (rectangle commands): text, menus and some 2D games. Most games draw their characters as polygons, which the texture filter covers. |
 | Aspect ratio | **4:3**, 14:9, Zoom 14:9, Zoom 16:9, Stretch to screen | Zoom crops the top and bottom. |
 | Screen size | **100% x 100%** | Shrink or stretch the picture to fit your TV. |
 | Frame skip | **Auto**, Off | Software renderer only. |
@@ -409,9 +412,13 @@ Screen size is always shared by all games.
 - **4x and 4.5x** depend on the game. Heavy scenes, such as Silent Hill's fog, can
   be more than the RSX can draw at 60 fps.
 - The filter only costs RSX time. FXAA costs the most. Smoothing on SPUs leaves the
-  RSX free; Sharp and Smooth cost almost nothing.
+  RSX free; Sharp, Sharp bilinear and Smooth cost almost nothing.
 - Give a demanding game a lower resolution in its own settings, and keep 4x for the
   rest.
+- The texture and sprite filters cost RSX time like a higher resolution does: for
+  every pixel, Bilinear and Sharp bilinear read 4 texels instead of 1. If a game slows
+  down, give it Nearest or a lower resolution in its
+  own settings.
 - If a game itself runs slowly (low game FPS at 100% speed), try **PS1 CPU speed
   +50%** in its own settings.
 - Games on the disc can pause briefly while the console's drive seeks. Disc images

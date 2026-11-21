@@ -20,6 +20,12 @@
 #ifndef MCHK
 #define MCHK 0
 #endif
+/* -DFILT (fast programs, MODE 1..3 only): texture filtering for the upscaled pass
+   (the native pass always samples the nearest texel): 1 bilinear, 2 sharp bilinear
+   (the TEXF_* values) */
+#ifndef FILT
+#define FILT 0
+#endif
 
 float wrapf(float a, float m) { return a - m * floor(a / m); }
 
@@ -84,6 +90,67 @@ float twin(float t, float m, float o)
    are used unrounded: a small interpolation error stays inside the texel. The
    byte-decoding programs below stay as the fallback if the start-up self-test
    rejects these. */
+
+#if FILT
+#if TWIN
+float4 bitf4(float4 v, float b) { float4 q = floor(v / b); return q - 2.0f * floor(q * 0.5f); }
+float4 twin4(float4 t, float m, float o)    /* twin() for four coordinates */
+{
+    float4 r = t;
+    r += bitf(m, 1.0f)  * (bitf(o, 1.0f)  - bitf4(t, 8.0f))   * 8.0f;
+    r += bitf(m, 2.0f)  * (bitf(o, 2.0f)  - bitf4(t, 16.0f))  * 16.0f;
+    r += bitf(m, 4.0f)  * (bitf(o, 4.0f)  - bitf4(t, 32.0f))  * 32.0f;
+    r += bitf(m, 8.0f)  * (bitf(o, 8.0f)  - bitf4(t, 64.0f))  * 64.0f;
+    r += bitf(m, 16.0f) * (bitf(o, 16.0f) - bitf4(t, 128.0f)) * 128.0f;
+    return r;
+}
+#endif
+/* the texel's column (or row) as the nearest-texel code finds it, before the texture window */
+float tcentre(float c, float lo, float hi) { return clamp(c - 256.0f * floor(c * (1.0f / 256.0f)), lo, hi); }
+/* columns (rows) e + off of neighbouring texels: inside the primitive's texels (lo..hi,
+   the same as at its edge: no colour from the next texture on the page) and through
+   the texture window (m, o) */
+float4 tpos4(float e, float4 off, float lo, float hi, float m, float o)
+{
+    float4 w = floor(clamp(e + off, float4(lo, lo, lo, lo), float4(hi, hi, hi, hi)) + 0.5f);
+#if TWIN
+    w = twin4(w, m, o);
+#endif
+    return w;
+}
+#if MODE == 3
+/* the colour of texel (x, y) */
+float4 tcol(sampler2D vram16, float x, float y, float4 t1)
+{
+    return tex2D(vram16, (t1.xy + float2(x, y)) * float2(1.0f / 1024.0f, 1.0f / 512.0f));
+}
+#else
+/* the CLUT indexes of four texels (see the nearest-texel code in main) */
+float4 idx4(sampler2D vram8, float4 x, float4 y, float4 t1)
+{
+#if MODE == 1
+    float4 hu = floor(x * 0.5f), m = x - 2.0f * hu, m2 = hu - 2.0f * floor(hu * 0.5f);
+    float4 bx = (t1.x * 2.0f + hu - 2.0f * m2 + 0.5f) * (1.0f / 2048.0f);
+#else
+    float4 m2 = x - 2.0f * floor(x * 0.5f);
+    float4 bx = (t1.x * 2.0f + x - 2.0f * m2 + 0.5f) * (1.0f / 2048.0f);
+#endif
+    float4 by = (t1.y + y) * (1.0f / 512.0f);
+    float4 b = floor(float4(tex2D(vram8, float2(bx.x, by.x)).x, tex2D(vram8, float2(bx.y, by.y)).x,
+                            tex2D(vram8, float2(bx.z, by.z)).x, tex2D(vram8, float2(bx.w, by.w)).x) * 255.0f + 0.5f);
+#if MODE == 1
+    float4 hb = floor(b * (1.0f / 16.0f));
+    b = lerp(b - 16.0f * hb, hb, m);
+#endif
+    return b;
+}
+/* the colour of CLUT entry i */
+float4 pal(sampler2D vram16, float i, float4 t1)
+{
+    return tex2D(vram16, float2(t1.z + i, t1.w) * float2(1.0f / 1024.0f, 1.0f / 512.0f));
+}
+#endif
+#endif
 /* Inputs prepared by the fast vertex program (hwr.vcg with FAST): col = the
    colour already scaled for this mode (PS1 red in .b) and bit 15 in .a; t1 = page
    and CLUT positions + 0.5; t3.z/.w = pass weights: drop = w2 + bit15 * (w1 - w2). */
@@ -105,13 +172,56 @@ half4 main(float4 uv : TEXCOORD0, float4 col : TEXCOORD1, float4 t1 : TEXCOORD2,
 #elif MODE == 4
     return h4tex2D(vram16, (floor(uv.xy) + 0.5f) * float2(1.0f / 1024.0f, 1.0f / 512.0f));
 #else
+    half4 t;
+#if FILT == 1 || FILT == 2
+    /* bilinear: the texel and its neighbours towards this pixel (across, down/up,
+       diagonal), weighted by the distance to their centres. Only texels that would
+       be drawn take part (not the transparent 0000, and of this pass); whether the
+       pixel is drawn at all, and its STP bit, come from the nearest texel as without
+       filtering: sprites keep their outlines and no dark fringes come in from the
+       transparent texels around them */
+    float2 c0 = floor(uv.xy), fr = uv.xy - c0, k = float2(1.0f / 1024.0f, 1.0f / 512.0f);
+    float2 d = float2(fr.x < 0.5f ? -1.0f : 1.0f, fr.y < 0.5f ? -1.0f : 1.0f);
+    float4 xs = tpos4(tcentre(c0.x, lim.x, lim.z), float4(0.0f, d.x, 0.0f, d.x), lim.x, lim.z,
+                      floor(t2.z + 0.5f), floor(t3.x + 0.5f));
+    float4 ys = tpos4(tcentre(c0.y, lim.y, lim.w), float4(0.0f, 0.0f, d.y, d.y), lim.y, lim.w,
+                      floor(t2.w + 0.5f), floor(t3.y + 0.5f));
+#if MODE == 3
+    float4 c00 = tcol(vram16, xs.x, ys.x, t1), c10 = tcol(vram16, xs.y, ys.y, t1);
+    float4 c01 = tcol(vram16, xs.z, ys.z, t1), c11 = tcol(vram16, xs.w, ys.w, t1);
+#else
+    float4 i4 = idx4(vram8, xs, ys, t1);
+    float4 c00 = pal(vram16, i4.x, t1), c10 = pal(vram16, i4.y, t1), c01 = pal(vram16, i4.z, t1), c11 = pal(vram16, i4.w, t1);
+#endif
+    float2 f = abs(fr - 0.5f);
+#if FILT == 2
+    /* sharp bilinear: blend only in a zone w texels wide around each texel edge, so
+       texel centres stay flat with smoothed edges between them. w: half a texel (at
+       4x 2 screen pixels: the outer pixels of a texel blend 1/4, the inner ones not;
+       a one-pixel zone was hardly visible behind the upscaling), but at least 4/3
+       screen pixels: at 2x a half-texel zone ends exactly at the pixel centres (no
+       blending at all, the same as nearest); 2/3 texel there blends each pixel 1/8,
+       halfway to bilinear. Texels per screen pixel from the screen-space derivatives;
+       up to w = 1 (minified textures: plain bilinear) */
+    float2 w = clamp((abs(ddx(uv.xy)) + abs(ddy(uv.xy))) * (4.0f / 3.0f), 0.5f, 1.0f);
+    f = clamp(0.5f - (0.5f - f) / w, 0.0f, 0.5f);
+#endif
+    float4 wt = float4((1.0f - f.x) * (1.0f - f.y), f.x * (1.0f - f.y), (1.0f - f.x) * f.y, f.x * f.y);
+    float4 one = float4(1.0f, 1.0f, 1.0f, 1.0f);
+    float4 sm = float4(dot(c00, one), dot(c10, one), dot(c01, one), dot(c11, one));
+    float4 al = float4(c00.a, c10.a, c01.a, c11.a);
+    /* drop (as in the test after this block): transparent + not this pass's */
+    float4 dr = (one - step(1.0f / 64.0f, sm)) + t3.z + al * t3.w;
+    float4 kw = wt * (one - step(0.5f, dr));
+    float4 cb = (c00 * kw.x + c10 * kw.y + c01 * kw.z + c11 * kw.w) / max(dot(kw, one), 1.0f / 64.0f);
+    t = (half4)(kw.x > 0.0f ? float4(cb.rgb, c00.a) : float4(0.0f, 0.0f, 0.0f, 0.0f));
+#else
     float2 w = floor(uv.xy);
     w = floor(clamp(w - 256.0f * floor(w * (1.0f / 256.0f)), lim.xy, lim.zw) + 0.5f);
 #if TWIN
     w.x = twin(w.x, floor(t2.z + 0.5f), floor(t3.x + 0.5f));
     w.y = twin(w.y, floor(t2.w + 0.5f), floor(t3.y + 0.5f));
 #endif
-    half4 t;
 #if MODE == 1
     float hu = floor(w.x * 0.5f), m = w.x - 2.0f * hu, m2 = hu - 2.0f * floor(hu * 0.5f);
     /* PS1 byte tpx*2 + hu is memory byte ^ 1 = tpx*2 + hu + 1 - 2*(hu & 1); the +1
@@ -128,11 +238,16 @@ half4 main(float4 uv : TEXCOORD0, float4 col : TEXCOORD1, float4 t1 : TEXCOORD2,
 #else
     t = h4tex2D(vram16, (t1.xy + w) * float2(1.0f / 1024.0f, 1.0f / 512.0f));
 #endif
+#endif /* FILT */
     /* never the transparent 0000 texel, and only this pass's texels */
     if ((dot(t, half4(1.0h, 1.0h, 1.0h, 1.0h)) == 0.0h ? 1.0h : 0.0h) + (half)t3.z + t.a * (half)t3.w > 0.5h) discard;
     /* modulation: 5-bit texel * vertex colour / 128, rounded down like the PS1 (raw
        textures have colour 128); in float: the product reaches 7905 */
+#if FILT == 1 || FILT == 2
+    float3 c5 = (float3)t.rgb * 31.0f, c8 = floor(col.rgb * 128.0f + (1.0f / 64.0f));   /* blended: not 5-bit */
+#else
     float3 c5 = floor((float3)t.rgb * 31.0f + 0.5f), c8 = floor(col.rgb * 128.0f + (1.0f / 64.0f));
+#endif
     float3 mo = c5 * c8 * (1.0f / 128.0f);        /* t2.x: native VRAM rounds down (see MODE 0) */
     return half4(min(lerp(mo, floor(mo), t2.x), 31.0f) * (1.0f / 31.0f), max(t.a, (half)col.a));
 #endif

@@ -49,6 +49,10 @@ enum { HWR_BLEND_NONE = 0, HWR_BLEND_AVG, HWR_BLEND_ADD, HWR_BLEND_SUB, HWR_BLEN
 #define HWR_PROG_SELF 16
 #define HWR_NPROG 17
 #define HWR_PROG_BASE(p) ((p) & 7)     /* the variant without the mask check */
+/* backend: texture-filtered versions of the textured variants (p + HWR_PROG_FILT(f), p <
+   HWR_PROG_SELF, f = TEXF_BILINEAR..TEXF_COUNT - 1), used in the upscaled pass only */
+#define HWR_PROG_FILT(f) (HWR_NPROG + ((f) - 1) * HWR_PROG_SELF)
+#define HWR_NPROGX HWR_PROG_FILT(TEXF_COUNT)
 
 typedef struct {
     uint8_t blend;               /* HWR_BLEND_* */
@@ -56,6 +60,7 @@ typedef struct {
     int16_t sx0, sy0, sx1, sy1;  /* scissor, native coords, exclusive end */
     uint8_t pass;                /* vertex pass value of the whole op (0, 1, 2) */
     uint8_t mset;                /* mask-set flag: every pixel gets bit 15 */
+    uint8_t sprite;              /* drawn by rectangle (sprite) commands: the sprite filter applies */
     uint32_t first, count;       /* triangle-list vertices */
     int16_t bx0, by0, bx1, by1;  /* area the op's triangles cover (native, clipped to the scissor,
                                     exclusive end; empty if bx1 <= bx0) */
