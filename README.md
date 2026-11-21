@@ -269,7 +269,7 @@ its own PSL1GHT front end, built around the PS3's hardware:
   does, including semi-transparency, texture windows, the mask bit and dithering.
 - High-resolution menus (480-line pictures) are drawn only as large as the TV can
   show, so they stay fast at 4x.
-- Picture filters: sharp, sharp bilinear, bilinear, FXAA on the RSX, or edge smoothing on the SPUs.
+- Picture filters: sharp, sharp bilinear, bilinear, FXAA on the RSX, edge smoothing on the SPUs, or a CRT TV look.
 - 10 save-state slots per game, with the time each was saved.
 - Per-game settings, kept in their own file.
 - Skip intro videos: presses Start/X during a game's opening videos, and
@@ -372,7 +372,7 @@ The in-game menu has these entries:
 |---|---|---|
 | CPU | Dynarec, 2 threads, **Dynarec, 1 thread**, Interpreter | 2 threads (experimental, can freeze some games): new game code is translated on the PPU's second thread while the game goes on more slowly. Interpreter only for games that misbehave. |
 | Renderer | **RSX 2x**, 3x, 4x, 4.5x, Software (native), RSX 1x (native, drawn by the RSX) | In game, it shows the resolution actually drawn. |
-| Picture filter | **Smoothing on SPUs**, Sharp (nearest), Sharp bilinear, Smooth (bilinear), FXAA (RSX) | Sharp bilinear keeps every pixel a crisp square of the same size and only smooths the edges between them: best with RSX 1x, Software, or 2x. |
+| Picture filter | **Smoothing on SPUs**, Sharp (nearest), Sharp bilinear, Smooth (bilinear), FXAA (RSX), CRT | Sharp bilinear keeps every pixel a crisp square of the same size and only smooths the edges between them: best with RSX 1x, Software, or 2x. CRT: a curved tube with scanlines (one per PS1 line, at any resolution) and an RGB mask; best on a 1080p TV, costs about as much as FXAA. |
 | Texture filter | **Nearest**, Bilinear, Sharp bilinear | Textures of 3D polygons, in the upscaled picture. RSX 2x or more. Bilinear blurs; Sharp bilinear keeps texels square and only smooths their edges. Costs RSX time. |
 | Sprite filter | **Nearest**, Bilinear, Sharp bilinear | The same for sprites (rectangle commands): text, menus and some 2D games. Most games draw their characters as polygons, which the texture filter covers. |
 | Aspect ratio | **4:3**, 14:9, Zoom 14:9, Zoom 16:9, Stretch to screen | Zoom crops the top and bottom. |
@@ -411,8 +411,8 @@ Screen size is always shared by all games.
 - **RSX 3x** is the sweet spot: most games run at full speed with any filter.
 - **4x and 4.5x** depend on the game. Heavy scenes, such as Silent Hill's fog, can
   be more than the RSX can draw at 60 fps.
-- The filter only costs RSX time. FXAA costs the most. Smoothing on SPUs leaves the
-  RSX free; Sharp, Sharp bilinear and Smooth cost almost nothing.
+- The filter only costs RSX time. FXAA and CRT cost the most. Smoothing on SPUs
+  leaves the RSX free; Sharp, Sharp bilinear and Smooth cost almost nothing.
 - Give a demanding game a lower resolution in its own settings, and keep 4x for the
   rest.
 - The texture and sprite filters cost RSX time like a higher resolution does: for

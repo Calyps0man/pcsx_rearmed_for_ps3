@@ -59,12 +59,12 @@ static u8 *frames; static u32 frames_off;
 static u32 *ovl; static u32 ovl_off; static int ovl_full_flush = 1;
 
 static rsxVertexProgram *vp; static void *vp_ucode;
-static rsxFragmentProgram *fp_blit, *fp_fxaa, *fp_blitd, *fp_fxaad, *fp_sharp, *fp_sharpd;
+static rsxFragmentProgram *fp_blit, *fp_fxaa, *fp_blitd, *fp_fxaad, *fp_sharp, *fp_sharpd, *fp_crt;
 static int fxaa_test(void);
 static void bind_texture(u32 unit, u8 location, u32 offset, unsigned w, unsigned h, u32 pitch, int linear, int swap_rb);
 static void quad_clip(float X0, float Y0, float X1, float Y1, float u0, float v0, float u1, float v1,
                       float tx, float ty, int prog);
-static u32 fp_blit_off, fp_fxaa_off, fp_blitd_off, fp_fxaad_off, fp_sharp_off, fp_sharpd_off, blit_unit, fxaa_unit;
+static u32 fp_blit_off, fp_fxaa_off, fp_blitd_off, fp_fxaad_off, fp_sharp_off, fp_sharpd_off, fp_crt_off, blit_unit, fxaa_unit;
 /* dithering of the RSX renderer's picture (video_set_dither): PS1 pixels per
    texture unit of the game texture; quick: menu redraws skip the smoothing */
 static int dith_on, quick; static float dith_nw, dith_nh;
@@ -161,6 +161,9 @@ int video_init(void)
         fp_sharpd = (rsxFragmentProgram *)sharpd_fpo;
         if (!(fp_sharp_off = load_fp(fp_sharp, &us)) || !(fp_sharpd_off = load_fp(fp_sharpd, &ud))) return 0;
         if (us != blit_unit || ud != blit_unit) logf_("video: sharp bilinear programs use other texture units (%u %u)\n", us, ud);
+        fp_crt = (rsxFragmentProgram *)crt_fpo;
+        if (!(fp_crt_off = load_fp(fp_crt, &us))) return 0;
+        if (us != blit_unit) logf_("video: the CRT program uses another texture unit (%u)\n", us);
     }
 
     if (!fxaa_test()) {
@@ -438,12 +441,14 @@ void video_redraw_quick(int on) { quick = on; }
 
 /* clip-space rectangle <- texture rectangle (normalised). prog: bit 0 FXAA, bit 1
    PS1 dithering (the texture is the game picture: dith_nw/nh give PS1 pixels), bit 2
-   sharp bilinear (not with FXAA; the texture bound bilinear) */
+   sharp bilinear (not with FXAA; the texture bound bilinear), bit 3 CRT (alone: tx, ty
+   are the size of a PS1 pixel, the "native" coordinates 0..1 across the picture) */
 static void quad_clip(float X0, float Y0, float X1, float Y1, float u0, float v0, float u1, float v1,
                       float tx, float ty, int prog)
 {
-    int fxaa = prog & 1, dith = (prog & 2) != 0, sharp = (prog & 4) != 0;
+    int fxaa = prog & 1, dith = (prog & 2) != 0, sharp = (prog & 4) != 0, crt = (prog & 8) != 0;
     float n0 = u0 * dith_nw, n1 = u1 * dith_nw, m0 = v0 * dith_nh, m1 = v1 * dith_nh;
+    if (crt) { n0 = m0 = 0.f; n1 = m1 = 1.f; }
     float *q;
     u32 off;
     int slot = cur * QUADS + quad_n;
@@ -466,6 +471,7 @@ static void quad_clip(float X0, float Y0, float X1, float Y1, float u0, float v0
     rsxLoadVertexProgram(rsx_ctx, vp, vp_ucode);
     video_vp_epoch++;          /* the hardware renderer reloads its own program */
     if (fxaa) rsxLoadFragmentProgramLocation(rsx_ctx, dith ? fp_fxaad : fp_fxaa, dith ? fp_fxaad_off : fp_fxaa_off, GCM_LOCATION_RSX);
+    else if (crt) rsxLoadFragmentProgramLocation(rsx_ctx, fp_crt, fp_crt_off, GCM_LOCATION_RSX);
     else if (sharp) rsxLoadFragmentProgramLocation(rsx_ctx, dith ? fp_sharpd : fp_sharp, dith ? fp_sharpd_off : fp_sharp_off, GCM_LOCATION_RSX);
     else rsxLoadFragmentProgramLocation(rsx_ctx, dith ? fp_blitd : fp_blit, dith ? fp_blitd_off : fp_blit_off, GCM_LOCATION_RSX);
     rsxDrawVertexArray(rsx_ctx, GCM_TYPE_TRIANGLE_STRIP, 0, 4);
@@ -703,6 +709,13 @@ static void draw_game_texture(u8 loc, u32 off, unsigned tw, unsigned th, u32 pit
         }
     }
     bind_texture(fxaa ? fxaa_unit : blit_unit, loc, off, tw, th, pitch, linear, swap_rb);
+    if (cfg.filter == FILTER_CRT && !quick) {
+        /* PS1 pixels per texture unit: the RSX renderer's picture (video_set_dither), or
+           the software renderer's frame itself (no dithering: the scanlines replace it) */
+        float nw = loc == GCM_LOCATION_RSX ? dith_nw : (float)tw, nh = loc == GCM_LOCATION_RSX ? dith_nh : (float)th;
+        quad(x0, y0, x1, y1, u0, v0, u1, v1, 1.f / nw, 1.f / nh, 8);
+        return;
+    }
     quad(x0, y0, x1, y1, u0, v0, u1, v1, 1.f / tw, 1.f / th, fxaa | d | (cfg.filter == FILTER_SHARP_BILINEAR ? 4 : 0));
 }
 

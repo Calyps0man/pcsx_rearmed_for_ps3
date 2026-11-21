@@ -33,7 +33,7 @@ void watchdog_start(void);
 void watchdog_frame(void);      /* called once per presented frame */
 
 /* ---- config.c ---- */
-enum { FILTER_SHARP = 0, FILTER_SMOOTH, FILTER_FXAA, FILTER_FXAA_SPU, FILTER_SHARP_BILINEAR, FILTER_COUNT };   /* settings files: append only */
+enum { FILTER_SHARP = 0, FILTER_SMOOTH, FILTER_FXAA, FILTER_FXAA_SPU, FILTER_SHARP_BILINEAR, FILTER_CRT, FILTER_COUNT };   /* settings files: append only */
 /* how the RSX renderer samples PS1 textures in the upscaled picture (stored in the
    settings files: append only) */
 enum { TEXF_NEAREST = 0, TEXF_BILINEAR, TEXF_SHARP_BILINEAR, TEXF_COUNT };

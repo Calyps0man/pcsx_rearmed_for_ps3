@@ -62,6 +62,7 @@ for v in "blit 0 0 0 blit" "blit 1 0 0 blitd" "blit 0 0 1 sharp" "blit 1 0 1 sha
   cpp -P -DDITHER=$2 -DFXAA_FLOAT=$3 -DSHARP=$4 -Isrc/shaders src/shaders/$1.fcg >"$GEN/$5.fcg"
   fpc "$GEN/$5.fcg" "$GEN/$5.fpo"
 done
+fpc src/shaders/crt.fcg "$GEN/crt.fpo"     # the CRT picture filter
 {
     c_array "$GEN/quad.vpo" quad_vpo
     c_array "$GEN/blit.fpo" blit_fpo
@@ -69,6 +70,7 @@ done
     c_array "$GEN/blitd.fpo" blitd_fpo
     c_array "$GEN/sharp.fpo" sharp_fpo
     c_array "$GEN/sharpd.fpo" sharpd_fpo
+    c_array "$GEN/crt.fpo" crt_fpo
     c_array "$GEN/fxaad.fpo" fxaad_fpo
     c_array "$GEN/fxaaf.fpo" fxaaf_fpo
     c_array "$GEN/fxaafd.fpo" fxaafd_fpo

@@ -215,9 +215,9 @@ static void text_fit(int x, int y, const char *s, uint32_t argb)
 }
 
 /* ---------------- settings ---------------- */
-static const char *filter_names[] = { "Sharp (nearest)", "Smooth (bilinear)", "FXAA (RSX)", "Smoothing on SPUs", "Sharp bilinear" };
+static const char *filter_names[] = { "Sharp (nearest)", "Smooth (bilinear)", "FXAA (RSX)", "Smoothing on SPUs", "Sharp bilinear", "CRT" };
 /* menu order of the FILTER_* values */
-static const int filter_order[] = { FILTER_SHARP, FILTER_SHARP_BILINEAR, FILTER_SMOOTH, FILTER_FXAA, FILTER_FXAA_SPU };
+static const int filter_order[] = { FILTER_SHARP, FILTER_SHARP_BILINEAR, FILTER_SMOOTH, FILTER_FXAA, FILTER_FXAA_SPU, FILTER_CRT };
 static const char *texf_names[] = { "Nearest", "Bilinear", "Sharp bilinear" };
 static const char *aspect_names[] = { "4:3", "Stretch to screen", "14:9", "Zoom 14:9", "Zoom 16:9" };
 /* menu order of the ASPECT_* values */
@@ -227,7 +227,7 @@ typedef struct { const char *label; const char *help; } item_t;
 static const item_t settings_items[] = {
     { "CPU", "Dynarec is much faster. 2 threads is experimental and can freeze some games." },
     { "Renderer", "RSX draws 3D at higher resolution on the PS3 GPU (experimental)." },
-    { "Picture filter", "How the picture is scaled to your TV. Sharp bilinear: crisp, even pixels." },
+    { "Picture filter", "How the picture is scaled to your TV. CRT: scanlines on a curved tube." },
     { "Texture filter", "Smooths textures, in most games characters too. RSX 2x or more." },
     { "Sprite filter", "Smooths sprites: text, menus and some 2D games. RSX 2x or more." },
     { "Aspect ratio", "Zoom keeps the PS1 shape and crops the top and bottom." },

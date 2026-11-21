@@ -1,0 +1,36 @@
+/* Picture filter "CRT": the finished game picture as on a curved CRT TV, in the
+   one pass that scales it to the screen (the sampler is bilinear).
+   uv: picture texture coordinate; px: the size of one PS1 pixel in texture
+   coordinates (so lines are PS1 lines at any RSX scale and in the software
+   renderer); pic: 0..1 across the shown picture (for the curvature); wpos: the
+   screen pixel (for the mask).
+   - curvature: the picture bent like a tube (barrel), black outside, soft edge
+   - scanlines: each PS1 line a beam that is wider for brighter colours, with dark
+     gaps between them; 480-line (interlaced) modes, whose lines are too fine for
+     the screen, get one scanline per two lines
+   - aperture grille: every third screen pixel column brighter in red, green, blue
+   - gamma: beams and mask mixed in linear light (gamma 2), brightness made up */
+float4 main(float2 uv : TEXCOORD0, float2 px : TEXCOORD1, float2 pic : TEXCOORD4, float4 wpos : WPOS,
+            uniform sampler2D tex) : COLOR
+{
+    /* texture coordinates per picture unit (picture and texture are both linear in
+       the screen position) */
+    float2 span = float2(ddx(uv.x) / ddx(pic.x), ddy(uv.y) / ddy(pic.y));
+    float2 c = pic * 2.0f - 1.0f;
+    float2 w = c * (1.0f + c.yx * c.yx * float2(0.04f, 0.06f));   /* curvature: x, y */
+    uv += (w - c) * 0.5f * span;
+    /* black outside the bent picture, with an edge about 2 screen pixels soft */
+    float2 e = saturate((1.0f - abs(w)) * 400.0f);
+    float2 p = uv / px;                                         /* PS1 pixels */
+    float lpp = 1.0f / max(abs(ddx(p.y)) + abs(ddy(p.y)), 1.0f / 64.0f);   /* screen pixels per line */
+    float il = lpp < 3.5f ? 0.5f : 1.0f;
+    float y = p.y * il, yc = floor(y) + 0.5f, dy = y - yc;      /* from the beam's centre, -0.5..0.5 */
+    /* the line's colour (horizontally the bilinear sampler softens like the beam) */
+    float3 col = tex2D(tex, float2(uv.x, yc / il * px.y)).rgb;
+    float3 bw = lerp(float3(0.24f, 0.24f, 0.24f), float3(0.45f, 0.45f, 0.45f), col);   /* beam width */
+    float3 sl = exp2(-(dy * dy) / (bw * bw) * 0.7f);
+    float k = floor(frac(wpos.x * (1.0f / 3.0f)) * 3.0f);
+    float3 mask = lerp(float3(0.7f, 0.7f, 0.7f), float3(1.0f, 1.0f, 1.0f), (float3)(float3(0.0f, 1.0f, 2.0f) == k));
+    float3 o = sqrt(min(col * col * sl * mask * 1.7f, 1.0f));
+    return float4(o * (e.x * e.y), 1.0f);
+}
