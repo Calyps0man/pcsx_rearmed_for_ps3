@@ -56,13 +56,19 @@ fpc() {
 }
 cgcomp -v src/shaders/quad.vcg "$GEN/quad.vpo" >/dev/null
 # (SHARP: the sharp bilinear picture filter)
-for v in "blit 0 0 0 blit" "blit 1 0 0 blitd" "blit 0 0 1 sharp" "blit 1 0 1 sharpd" \
-         "fxaa 0 0 0 fxaa" "fxaa 1 0 0 fxaad" "fxaa 0 1 0 fxaaf" "fxaa 1 1 0 fxaafd"; do
+# (CMAT: with the Colour setting's matrix)
+for v in "blit 0 0 0 0 blit" "blit 1 0 0 0 blitd" "blit 0 0 1 0 sharp" "blit 1 0 1 0 sharpd" \
+         "blit 0 0 0 1 blitc" "blit 1 0 0 1 blitdc" "blit 0 0 1 1 sharpc" "blit 1 0 1 1 sharpdc" \
+         "fxaa 0 0 0 0 fxaa" "fxaa 1 0 0 0 fxaad" "fxaa 0 1 0 0 fxaaf" "fxaa 1 1 0 0 fxaafd"; do
   set -- $v
-  cpp -P -DDITHER=$2 -DFXAA_FLOAT=$3 -DSHARP=$4 -Isrc/shaders src/shaders/$1.fcg >"$GEN/$5.fcg"
-  fpc "$GEN/$5.fcg" "$GEN/$5.fpo"
+  cpp -P -DDITHER=$2 -DFXAA_FLOAT=$3 -DSHARP=$4 -DCMAT=$5 -Isrc/shaders src/shaders/$1.fcg >"$GEN/$6.fcg"
+  fpc "$GEN/$6.fcg" "$GEN/$6.fpo"
 done
-fpc src/shaders/crt.fcg "$GEN/crt.fpo"     # the CRT picture filter
+# the picture filters of post.fcg: CRT, CRT flat, scanlines, LCD grid, composite, sharpen
+for p in 1 2 3 4 5 6; do
+  cpp -P -DPOST=$p src/shaders/post.fcg >"$GEN/post$p.fcg"
+  fpc "$GEN/post$p.fcg" "$GEN/post$p.fpo"
+done
 {
     c_array "$GEN/quad.vpo" quad_vpo
     c_array "$GEN/blit.fpo" blit_fpo
@@ -70,7 +76,7 @@ fpc src/shaders/crt.fcg "$GEN/crt.fpo"     # the CRT picture filter
     c_array "$GEN/blitd.fpo" blitd_fpo
     c_array "$GEN/sharp.fpo" sharp_fpo
     c_array "$GEN/sharpd.fpo" sharpd_fpo
-    c_array "$GEN/crt.fpo" crt_fpo
+    for n in blitc blitdc sharpc sharpdc post1 post2 post3 post4 post5 post6; do c_array "$GEN/$n.fpo" ${n}_fpo; done
     c_array "$GEN/fxaad.fpo" fxaad_fpo
     c_array "$GEN/fxaaf.fpo" fxaaf_fpo
     c_array "$GEN/fxaafd.fpo" fxaafd_fpo

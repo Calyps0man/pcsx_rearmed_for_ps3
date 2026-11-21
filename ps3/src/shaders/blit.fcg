@@ -2,12 +2,17 @@
    PS1 dither pattern (dither.h). SHARP: sharp bilinear (the sampler is bilinear):
    each source pixel stays a flat square on the screen and only the screen pixel
    on the edge between two of them is blended, so non-integer scaling neither
-   blurs like bilinear nor gives uneven pixel sizes like nearest */
+   blurs like bilinear nor gives uneven pixel sizes like nearest. CMAT: then the
+   Colour setting's matrix (columns m0..m2: one multiply-add on the whole colour,
+   see post.fcg) */
 #ifndef DITHER
 #define DITHER 0
 #endif
 #ifndef SHARP
 #define SHARP 0
+#endif
+#ifndef CMAT
+#define CMAT 0
 #endif
 #if DITHER
 #include "dither.h"
@@ -27,17 +32,48 @@ float4 sharp(sampler2D tex, float2 uv, float2 texel)
     float2 f = (c - clamp(c, -r, r)) * sc + 0.5f;
     return tex2D(tex, (fl + f) * texel);
 }
-#if DITHER
+#endif
+
+#if CMAT
+float4 colour(float4 c, float4 m0, float4 m1, float4 m2)
+{
+    return float4(saturate(m0.xyz * c.r + m1.xyz * c.g + m2.xyz * c.b), c.a);
+}
+#if SHARP && DITHER
+half4 main(float2 uv : TEXCOORD0, float2 texel : TEXCOORD1, float2 native : TEXCOORD4,
+           float4 m0 : TEXCOORD5, float4 m1 : TEXCOORD6, float4 m2 : TEXCOORD7, uniform sampler2D tex) : COLOR
+{
+    return dither5((half4)colour(sharp(tex, uv, texel), m0, m1, m2), native);
+}
+#elif SHARP
+float4 main(float2 uv : TEXCOORD0, float2 texel : TEXCOORD1,
+            float4 m0 : TEXCOORD5, float4 m1 : TEXCOORD6, float4 m2 : TEXCOORD7, uniform sampler2D tex) : COLOR
+{
+    return colour(sharp(tex, uv, texel), m0, m1, m2);
+}
+#elif DITHER
+half4 main(float2 uv : TEXCOORD0, float2 native : TEXCOORD4,
+           float4 m0 : TEXCOORD5, float4 m1 : TEXCOORD6, float4 m2 : TEXCOORD7, uniform sampler2D tex) : COLOR
+{
+    return dither5((half4)colour(tex2D(tex, uv), m0, m1, m2), native);
+}
+#else
+float4 main(float2 uv : TEXCOORD0, float4 m0 : TEXCOORD5, float4 m1 : TEXCOORD6, float4 m2 : TEXCOORD7,
+            uniform sampler2D tex) : COLOR
+{
+    return colour(tex2D(tex, uv), m0, m1, m2);
+}
+#endif
+#elif SHARP && DITHER
 half4 main(float2 uv : TEXCOORD0, float2 texel : TEXCOORD1, float2 native : TEXCOORD4, uniform sampler2D tex) : COLOR
 {
     return dither5((half4)sharp(tex, uv, texel), native);
 }
-#else
+#elif SHARP
 float4 main(float2 uv : TEXCOORD0, float2 texel : TEXCOORD1, uniform sampler2D tex) : COLOR
 {
     return sharp(tex, uv, texel);
 }
-#endif
 #elif DITHER
 half4 main(float2 uv : TEXCOORD0, float2 native : TEXCOORD4, uniform sampler2D tex) : COLOR
 {
