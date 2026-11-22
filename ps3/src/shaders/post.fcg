@@ -1,0 +1,95 @@
+/* Picture filters that work on the finished game picture in the one pass that
+   scales it to the screen (the sampler is bilinear), one program per -DPOST:
+   1 CRT, 2 CRT flat (no curvature), 3 scanlines, 4 LCD grid, 5 composite
+   (de-dither), 6 sharpen (CAS). Every one ends with the Colour setting's matrix.
+   uv: picture texture coordinate; px: the size of one PS1 pixel in texture
+   coordinates (sharpen: of one texture texel), so lines and cells are PS1 pixels at
+   any RSX scale and in the software renderer; pic: 0..1 across the shown picture;
+   m0..m2: the columns of the colour matrix (identity for Normal; as columns the
+   result is one multiply-add on the whole colour: three dot products would write
+   the colour output one channel at a time, which cgcomp gets wrong, see
+   tools/fpcheck.py); wpos: the screen pixel.
+   CRT: curvature (the picture bent like a tube, black outside, soft edge);
+   scanlines (each PS1 line a beam that is wider for brighter colours, dark gaps
+   between them; 480-line interlaced modes, whose lines are too fine for the screen,
+   get one per two lines); an aperture grille (every third screen pixel column
+   brighter in red, green, blue); beams and mask mixed in linear light (gamma 2),
+   brightness made up. */
+#ifndef POST
+#define POST 1
+#endif
+
+float3 colour(float3 c, float4 m0, float4 m1, float4 m2)
+{
+    return saturate(m0.xyz * c.r + m1.xyz * c.g + m2.xyz * c.b);
+}
+
+float4 main(float2 uv : TEXCOORD0, float2 px : TEXCOORD1, float2 pic : TEXCOORD4,
+            float4 m0 : TEXCOORD5, float4 m1 : TEXCOORD6, float4 m2 : TEXCOORD7, float4 wpos : WPOS,
+            uniform sampler2D tex) : COLOR
+{
+    float3 o;
+    float edge = 1.0f;
+#if POST <= 3
+#if POST == 1
+    /* texture coordinates per picture unit (picture and texture are both linear in
+       the screen position) */
+    float2 span = float2(ddx(uv.x) / ddx(pic.x), ddy(uv.y) / ddy(pic.y));
+    float2 c = pic * 2.0f - 1.0f;
+    float2 w = c * (1.0f + c.yx * c.yx * float2(0.04f, 0.06f));   /* curvature: x, y */
+    uv += (w - c) * 0.5f * span;
+    /* black outside the bent picture, with an edge about 2 screen pixels soft */
+    float2 e = saturate((1.0f - abs(w)) * 400.0f);
+    edge = e.x * e.y;
+#endif
+    float2 p = uv / px;                                         /* PS1 pixels */
+    float lpp = 1.0f / max(abs(ddx(p.y)) + abs(ddy(p.y)), 1.0f / 64.0f);   /* screen pixels per line */
+    float il = lpp < 3.5f ? 0.5f : 1.0f;
+    float y = p.y * il, yc = floor(y) + 0.5f, dy = y - yc;      /* from the beam's centre, -0.5..0.5 */
+    /* the line's colour (horizontally the bilinear sampler softens like the beam) */
+    float3 col = tex2D(tex, float2(uv.x, yc / il * px.y)).rgb;
+#if POST == 3
+    /* scanlines alone: wider beams (lighter gaps), no mask */
+    float3 bw = lerp(float3(0.3f, 0.3f, 0.3f), float3(0.5f, 0.5f, 0.5f), col);
+    float3 sl = exp2(-(dy * dy) / (bw * bw) * 0.7f);
+    o = sqrt(min(col * col * sl * 1.3f, 1.0f));
+#else
+    float3 bw = lerp(float3(0.24f, 0.24f, 0.24f), float3(0.45f, 0.45f, 0.45f), col);   /* beam width */
+    float3 sl = exp2(-(dy * dy) / (bw * bw) * 0.7f);
+    float k = floor(frac(wpos.x * (1.0f / 3.0f)) * 3.0f);
+    float3 mask = lerp(float3(0.7f, 0.7f, 0.7f), float3(1.0f, 1.0f, 1.0f), (float3)(float3(0.0f, 1.0f, 2.0f) == k));
+    o = sqrt(min(col * col * sl * mask * 1.7f, 1.0f));
+#endif
+#elif POST == 4
+    /* LCD grid: a thin dark line around every PS1 pixel, about one screen pixel wide */
+    float2 p = uv / px, f = frac(p);
+    float2 spp = 1.0f / max(abs(ddx(p)) + abs(ddy(p)), float2(1.0f / 64.0f, 1.0f / 64.0f));   /* screen pixels per PS1 pixel */
+    float2 g = saturate(min(f, 1.0f - f) * spp);
+    o = tex2D(tex, uv).rgb * lerp(0.6f, 1.0f, g.x * g.y);
+#elif POST == 5
+    /* composite (de-dither): like a TV's composite input, the PS1's dither patterns
+       blend into the colours they stand for. The four neighbours half a PS1 pixel
+       away (with the bilinear sampler: the 2x2 blocks around this point) are averaged
+       in where they are within about two 5-bit steps of this pixel, which dithering
+       is; real edges differ more and stay sharp */
+    float3 c0 = tex2D(tex, uv).rgb;
+    float3 a = tex2D(tex, uv + px * float2(-0.5f, -0.5f)).rgb, b = tex2D(tex, uv + px * float2(0.5f, -0.5f)).rgb;
+    float3 d = tex2D(tex, uv + px * float2(-0.5f, 0.5f)).rgb, h = tex2D(tex, uv + px * float2(0.5f, 0.5f)).rgb;
+    float4 dist = float4(dot(abs(a - c0), float3(1.0f, 1.0f, 1.0f)), dot(abs(b - c0), float3(1.0f, 1.0f, 1.0f)),
+                         dot(abs(d - c0), float3(1.0f, 1.0f, 1.0f)), dot(abs(h - c0), float3(1.0f, 1.0f, 1.0f)));
+    float4 wt = saturate(2.0f - dist * (1.0f / 0.1f));          /* 1 up to 0.1 apart, 0 from 0.2 */
+    o = (c0 + a * wt.x + b * wt.y + d * wt.z + h * wt.w) / (1.0f + dot(wt, float4(1.0f, 1.0f, 1.0f, 1.0f)));
+#else
+    /* sharpen: AMD FidelityFX CAS (contrast adaptive sharpening), the five-tap version:
+       neighbours one texel away, the sharpening backed off where the contrast is
+       already high, so edges do not ring */
+    float3 e = tex2D(tex, uv).rgb;
+    float3 b = tex2D(tex, uv + float2(0.0f, -px.y)).rgb, d = tex2D(tex, uv + float2(-px.x, 0.0f)).rgb;
+    float3 f = tex2D(tex, uv + float2(px.x, 0.0f)).rgb, h = tex2D(tex, uv + float2(0.0f, px.y)).rgb;
+    float3 mn = min(min(min(b, d), min(f, h)), e), mx = max(max(max(b, d), max(f, h)), e);
+    float3 amp = sqrt(saturate(min(mn, 1.0f - mx) / max(mx, 1.0f / 256.0f)));
+    float3 wgt = amp * (-1.0f / 6.0f);                          /* sharpness: -1/8 (soft) .. -1/5 (strong) */
+    o = saturate(((b + d + f + h) * wgt + e) / (1.0f + 4.0f * wgt));
+#endif
+    return float4(colour(o, m0, m1, m2) * edge, 1.0f);
+}

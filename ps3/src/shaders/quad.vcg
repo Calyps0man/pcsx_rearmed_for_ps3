@@ -1,10 +1,14 @@
 /* full-screen quads: position in clip space, texture coordinate, the size of one
    source texel, and (for FXAA) the four corner sample positions half a texel away,
    so the fragment program spends no instructions on them. native: PS1 pixel
-   position of the texture coordinate (the dithering programs) */
+   position of the texture coordinate (the dithering programs; 0..1 across the
+   picture for the picture filters of post.fcg). m0..m2: the columns of the Colour
+   setting's matrix, the same at every corner */
 void main(float2 pos : POSITION, float2 uv : TEXCOORD0, float2 texel : TEXCOORD1, float2 native : TEXCOORD2,
+          float4 m0 : TEXCOORD3, float4 m1 : TEXCOORD4, float4 m2 : TEXCOORD5,
           out float4 oPos : POSITION, out float2 oUv : TEXCOORD0, out float2 oTexel : TEXCOORD1,
-          out float4 oNwNe : TEXCOORD2, out float4 oSwSe : TEXCOORD3, out float2 oNative : TEXCOORD4)
+          out float4 oNwNe : TEXCOORD2, out float4 oSwSe : TEXCOORD3, out float2 oNative : TEXCOORD4,
+          out float4 oM0 : TEXCOORD5, out float4 oM1 : TEXCOORD6, out float4 oM2 : TEXCOORD7)
 {
     float2 h = 0.5f * texel;
     oPos = float4(pos, 0.0f, 1.0f);
@@ -13,4 +17,5 @@ void main(float2 pos : POSITION, float2 uv : TEXCOORD0, float2 texel : TEXCOORD1
     oNwNe = float4(uv.x - h.x, uv.y - h.y, uv.x + h.x, uv.y - h.y);
     oSwSe = float4(uv.x - h.x, uv.y + h.y, uv.x + h.x, uv.y + h.y);
     oNative = native;
+    oM0 = m0; oM1 = m1; oM2 = m2;
 }

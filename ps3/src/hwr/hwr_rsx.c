@@ -83,8 +83,9 @@ static struct {
     rsxProgramConst *vp_native[2];   /* the "native" constant (1 in the native pass) */
     int vp_cur;                   /* set of the loaded one (-1: unknown) */
     unsigned vp_epoch;            /* video_vp_epoch when it was loaded */
-    rsxFragmentProgram *fps[2][HWR_NPROG]; u32 fps_off[2][HWR_NPROG];
-    int ua[2][HWR_NPROG], ub[2][HWR_NPROG];   /* units of "vram" / "vram16" and "vram8" (-1) */
+    /* + the texture-filtered versions of the textured programs (fast set only; others 0) */
+    rsxFragmentProgram *fps[2][HWR_NPROGX]; u32 fps_off[2][HWR_NPROGX];
+    int ua[2][HWR_NPROGX], ub[2][HWR_NPROGX];   /* units of "vram" / "vram16" and "vram8" (-1) */
     int fast;                     /* program set in use */
     int px, py, pw, ph;           /* displayed VRAM rect of the last presented frame */
     int check;                    /* VRAM check: the software renderer draws too, as a reference */
@@ -93,6 +94,7 @@ static struct {
     int nat_one;                  /* current native surface writes X = 1 (-1: not set) */
     int fix_blend, fix_alpha, fix_depth;   /* bit-15 fix-up pass variant (self-test picks) */
     u32 cpu_waits, syncs_in, syncs_out;
+    u32 n_flat, n_tex, n_spr, n_filt, n_copy;   /* upscaled-pass draws since the last log line (texture filters) */
     u64 sync_ticks;               /* timebase ticks spent in CPU<->RSX VRAM syncs */
     /* where the GPU time goes (timebase ticks, since the last stats line) */
     u64 t_cmd, t_submit, t_copy, t_wait, t_present, t_up, t_nat;
@@ -223,13 +225,21 @@ static u32 load_fp(rsxFragmentProgram *fp, const char *na, const char *nb, int *
 
 static int alloc_once(void)
 {
-    static const unsigned char *fps[2][HWR_NPROG] = {
+    static const unsigned char *fps[2][HWR_NPROGX] = {
         { hwr_f0_fpo, hwr_f1_fpo, hwr_f2_fpo, hwr_f3_fpo, hwr_f4_fpo, hwr_f1w_fpo, hwr_f2w_fpo, hwr_f3w_fpo,
           hwr_mf0_fpo, hwr_mf1_fpo, hwr_mf2_fpo, hwr_mf3_fpo, hwr_mf4_fpo, hwr_mf1w_fpo, hwr_mf2w_fpo, hwr_mf3w_fpo,
           hwr_f5_fpo },
         { hwr_ff0_fpo, hwr_ff1_fpo, hwr_ff2_fpo, hwr_ff3_fpo, hwr_ff4_fpo, hwr_ff1w_fpo, hwr_ff2w_fpo, hwr_ff3w_fpo,
           hwr_fmf0_fpo, hwr_fmf1_fpo, hwr_fmf2_fpo, hwr_fmf3_fpo, hwr_fmf4_fpo, hwr_fmf1w_fpo, hwr_fmf2w_fpo, hwr_fmf3w_fpo,
-          hwr_ff5_fpo } };
+          hwr_ff5_fpo,
+          /* HWR_PROG_FILT(f) + p: the texture filters for the textured variants (bilinear,
+             sharp bilinear) */
+#define FILT_SET(c) NULL, hwr_f##c##f1_fpo, hwr_f##c##f2_fpo, hwr_f##c##f3_fpo, \
+                    NULL, hwr_f##c##f1w_fpo, hwr_f##c##f2w_fpo, hwr_f##c##f3w_fpo, \
+                    NULL, hwr_f##c##mf1_fpo, hwr_f##c##mf2_fpo, hwr_f##c##mf3_fpo, \
+                    NULL, hwr_f##c##mf1w_fpo, hwr_f##c##mf2w_fpo, hwr_f##c##mf3w_fpo
+          FILT_SET(b), FILT_SET(p) } };
+#undef FILT_SET
     int s;
     void *tgt, *dep; u32 sz; int i;
     if (R.ok) return 1;
@@ -296,7 +306,8 @@ static int alloc_once(void)
         rsxVertexProgramGetUCode(R.vps[s], &R.vpus[s], &sz);
         R.vp_native[s] = rsxVertexProgramGetConst(R.vps[s], "native");
         if (!R.vp_native[s]) logf_("hwr: vertex program %d has no 'native' constant\n", s);
-        for (i = 0; i < HWR_NPROG; i++) {
+        for (i = 0; i < HWR_NPROGX; i++) {
+            if (!fps[s][i]) { R.fps[s][i] = NULL; R.fps_off[s][i] = 0; continue; }
             R.fps[s][i] = (rsxFragmentProgram *)fps[s][i];
             if (!(R.fps_off[s][i] = load_fp(R.fps[s][i], s ? "vram16" : "vram", s ? "vram8" : NULL,
                                             &R.ua[s][i], &R.ub[s][i]))) return 0;
@@ -510,6 +521,10 @@ static void draw_ops(const hwr_op *ops, int nops, int native)
     signed char bound[16];                  /* view bound on each texture unit (-1 unknown) */
     memset(bound, -1, sizeof bound);
     int um = R.mask_used;                   /* each surface's own mask plane (stencil) */
+    /* texture filters for polygons and sprites: upscaled pass only (the native VRAM
+       keeps the PS1's nearest texels), with the fast programs, at 2x and more */
+    int tf = 0, sf = 0;
+    if (!native && R.fast && R.SX >= 2) { tf = cfg.tex_filter; sf = cfg.sprite_filter; }
     {   /* the vertex program, loaded again only when something else used the RSX's
            vertex program slot; the pass is its "native" constant (cheap to change) */
         float nv[4] = { native ? 1.f : 0.f, 0.f, 0.f, 0.f };
@@ -563,7 +578,17 @@ static void draw_ops(const hwr_op *ops, int nops, int native)
                 skey = -1;
             }
         }
-        if (p != prog) { prog = p; use_prog(prog, bound); }
+        {   /* the program drawn with: p, or its filtered version (p stays for the logic below) */
+            int lp = p, b = HWR_PROG_BASE(p), f = o->sprite ? sf : tf;
+            if (f > TEXF_NEAREST && f < TEXF_COUNT && p < HWR_PROG_SELF && b != 0 && b != 4) lp = p + HWR_PROG_FILT(f);
+            if (!native) {
+                if (b == 0) R.n_flat++;
+                else if (b == 4) R.n_copy++;
+                else if (p < HWR_PROG_SELF) { if (o->sprite) R.n_spr++; else R.n_tex++; }
+                if (lp != p) R.n_filt++;
+            }
+            if (lp != prog) { prog = lp; use_prog(prog, bound); }
+        }
         if (o->blend != blend) { blend = o->blend; set_blend(blend); }
         if (o->sx0 != sc0 || o->sy0 != sc1 || o->sx1 != sc2 || o->sy1 != sc3) {
             sc0 = o->sx0; sc1 = o->sy0; sc2 = o->sx1; sc3 = o->sy1;
@@ -1461,6 +1486,8 @@ static void start(void)
     /* the self-test ran at the first game start, maybe into another game's log */
     logf_("hwr: self-test: full mode %s, bit 15 %s, %s programs\n", R.full_ok ? "passed" : "FAILED",
           !R.full_ok ? "-" : R.bit15 ? "kept" : "NOT kept (failed its test)", R.fast ? "fast" : "byte-decoding");
+    if (!R.fast && (cfg.tex_filter || cfg.sprite_filter))
+        logf_("hwr: texture filters need the fast programs: nearest texels only\n");
     logf_("hwr: GPU renderer on, %dx%s (%dx%d), %s mode\n", R.SX, R.S > HWR_MAXS ? " wide, 4.5x tall" : "", 1024 * R.SX, (int)(512.f * R.SY + 0.5f),
           R.base.full ? (R.check ? "full, with the VRAM check (software renderer draws too)" : "full (the RSX draws everything)")
                       : "hybrid (software renderer + RSX)");
@@ -1473,6 +1500,10 @@ static void log_stats(void)
           hwr_stats.frames, hwr_stats.prims, R.base.full ? "barriers" : "snapshots", hwr_stats.snapshots,
           hwr_stats.max_snaps, hwr_stats.fallbacks, hwr_stats.overflow_frames, R.cpu_waits,
           hwr_stats.mask_checks && !R.base.full ? " (mask-check drawing: not emulated in hybrid mode)" : "");
+    logf_("hwr: upscaled draws: %u flat, %u textured polygon, %u textured sprite, %u filtered, %u VRAM copies; "
+          "texture filter %d, sprite filter %d, %s programs, scale %d\n", R.n_flat, R.n_tex, R.n_spr, R.n_filt, R.n_copy,
+          cfg.tex_filter, cfg.sprite_filter, R.fast ? "fast" : "byte-decoding", R.SX);
+    R.n_flat = R.n_tex = R.n_spr = R.n_filt = R.n_copy = 0;
     if (hwr_stats.mask_checks) logf_("hwr: %u primitives drawn with the mask check on\n", hwr_stats.mask_checks);
     if (R.base.full)
         logf_("hwr: VRAM syncs: %u CPU->RSX, %u RSX->CPU, %.1f ms total\n", R.syncs_in, R.syncs_out,

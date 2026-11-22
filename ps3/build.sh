@@ -55,16 +55,28 @@ fpc() {
   cgcomp -f "$1" "$2" >/dev/null
 }
 cgcomp -v src/shaders/quad.vcg "$GEN/quad.vpo" >/dev/null
-for v in "blit 0 0 blit" "blit 1 0 blitd" "fxaa 0 0 fxaa" "fxaa 1 0 fxaad" "fxaa 0 1 fxaaf" "fxaa 1 1 fxaafd"; do
+# (SHARP: the sharp bilinear picture filter)
+# (CMAT: with the Colour setting's matrix)
+for v in "blit 0 0 0 0 blit" "blit 1 0 0 0 blitd" "blit 0 0 1 0 sharp" "blit 1 0 1 0 sharpd" \
+         "blit 0 0 0 1 blitc" "blit 1 0 0 1 blitdc" "blit 0 0 1 1 sharpc" "blit 1 0 1 1 sharpdc" \
+         "fxaa 0 0 0 0 fxaa" "fxaa 1 0 0 0 fxaad" "fxaa 0 1 0 0 fxaaf" "fxaa 1 1 0 0 fxaafd"; do
   set -- $v
-  cpp -P -DDITHER=$2 -DFXAA_FLOAT=$3 -Isrc/shaders src/shaders/$1.fcg >"$GEN/$4.fcg"
-  fpc "$GEN/$4.fcg" "$GEN/$4.fpo"
+  cpp -P -DDITHER=$2 -DFXAA_FLOAT=$3 -DSHARP=$4 -DCMAT=$5 -Isrc/shaders src/shaders/$1.fcg >"$GEN/$6.fcg"
+  fpc "$GEN/$6.fcg" "$GEN/$6.fpo"
+done
+# the picture filters of post.fcg: CRT, CRT flat, scanlines, LCD grid, composite, sharpen
+for p in 1 2 3 4 5 6; do
+  cpp -P -DPOST=$p src/shaders/post.fcg >"$GEN/post$p.fcg"
+  fpc "$GEN/post$p.fcg" "$GEN/post$p.fpo"
 done
 {
     c_array "$GEN/quad.vpo" quad_vpo
     c_array "$GEN/blit.fpo" blit_fpo
     c_array "$GEN/fxaa.fpo" fxaa_fpo
     c_array "$GEN/blitd.fpo" blitd_fpo
+    c_array "$GEN/sharp.fpo" sharp_fpo
+    c_array "$GEN/sharpd.fpo" sharpd_fpo
+    for n in blitc blitdc sharpc sharpdc post1 post2 post3 post4 post5 post6; do c_array "$GEN/$n.fpo" ${n}_fpo; done
     c_array "$GEN/fxaad.fpo" fxaad_fpo
     c_array "$GEN/fxaaf.fpo" fxaaf_fpo
     c_array "$GEN/fxaafd.fpo" fxaafd_fpo
@@ -84,6 +96,20 @@ for F in 0 1; do
     set -- $v
     n=$4; [ $F = 1 ] && n=f$4
     cpp -P -DMODE=$1 -DTWIN=$2 -DMCHK=$3 -DFAST=$F src/shaders/hwr.fcg >"$GEN/hwr_$n.fcg"
+    fpc "$GEN/hwr_$n.fcg" "$GEN/hwr_$n.fpo"
+    c_array "$GEN/hwr_$n.fpo" "hwr_${n}_fpo" >>"$GEN/shaders.h"
+  done
+done
+# texture filters (FILT=1 bilinear, 2 sharp bilinear: names fb..., fp...): the
+# textured fast programs, with and without the texture window and the mask check; the
+# upscaled pass only
+for fl in "1 b" "2 p"; do
+  set -- $fl; FL=$1; L=$2
+  for v in "1 0 0 f1" "2 0 0 f2" "3 0 0 f3" "1 1 0 f1w" "2 1 0 f2w" "3 1 0 f3w" \
+           "1 0 1 mf1" "2 0 1 mf2" "3 0 1 mf3" "1 1 1 mf1w" "2 1 1 mf2w" "3 1 1 mf3w"; do
+    set -- $v
+    n=f$L$4
+    cpp -P -DMODE=$1 -DTWIN=$2 -DMCHK=$3 -DFAST=1 -DFILT=$FL src/shaders/hwr.fcg >"$GEN/hwr_$n.fcg"
     fpc "$GEN/hwr_$n.fcg" "$GEN/hwr_$n.fpo"
     c_array "$GEN/hwr_$n.fpo" "hwr_${n}_fpo" >>"$GEN/shaders.h"
   done

@@ -51,6 +51,8 @@ static int gb[4];                       /* the open group's covered area (ints, 
 static int pb[4];                       /* the last emitted primitive's area */
 static float gx0, gy0, gx1, gy1;        /* area covered by the open group */
 static int cur_prog;                   /* program variant of the primitive being emitted */
+static int cur_sprite;                 /* it comes from a rectangle (sprite) command */
+static int grp_sprite;                 /* the open group's */
 
 static inline uint32_t le32(const uint32_t *p)
 {
@@ -99,7 +101,7 @@ static void close_group(void)
     o = &ops[nops++];
     o->blend = (uint8_t)(grp_abr + 1);
     o->prog = (uint8_t)grp_prog;
-    o->pass = 2; o->mset = (uint8_t)grp_mset;
+    o->pass = 2; o->mset = (uint8_t)grp_mset; o->sprite = (uint8_t)grp_sprite;
     o->sx0 = grp_sc[0]; o->sy0 = grp_sc[1]; o->sx1 = grp_sc[2]; o->sy1 = grp_sc[3];
     o->first = nv; o->count = nsv;
     o->bx0 = (int16_t)gb[0]; o->by0 = (int16_t)gb[1]; o->bx1 = (int16_t)gb[2]; o->by1 = (int16_t)gb[3];
@@ -125,12 +127,12 @@ static hwr_op *op_for(int blend, const int *sc)
     close_group();
     o = nops ? &ops[nops - 1] : 0;
     if (o && o->blend == blend && o->prog == cur_prog && o->sx0 == sc[0] && o->sy0 == sc[1] && o->sx1 == sc[2] && o->sy1 == sc[3]
-        && o->pass == 0 && o->mset == st.mset && o->first + o->count == (uint32_t)nv)
+        && o->pass == 0 && o->mset == st.mset && o->sprite == cur_sprite && o->first + o->count == (uint32_t)nv)
         return o;
     o = &ops[nops++];
     o->blend = (uint8_t)blend;
     o->prog = (uint8_t)cur_prog;
-    o->pass = 0; o->mset = (uint8_t)st.mset;
+    o->pass = 0; o->mset = (uint8_t)st.mset; o->sprite = (uint8_t)cur_sprite;
     o->sx0 = sc[0]; o->sy0 = sc[1]; o->sx1 = sc[2]; o->sy1 = sc[3];
     o->first = nv; o->count = 0;
     o->bx0 = o->by0 = 32767; o->bx1 = o->by1 = -32768;
@@ -207,16 +209,17 @@ static void emit(const pv *p, int n, int semi, int textured, const int *sc)
         /* all pass-1 halves of a group are drawn before all pass-2 halves; that is only
            the right order while the group's primitives do not overlap each other */
         if (grp_open && px0 < gx1 && px1 > gx0 && py0 < gy1 && py1 > gy0) close_group();
-        if (!grp_open || grp_abr != st.abr || grp_prog != cur_prog || grp_mset != st.mset || memcmp(grp_sc, sc, sizeof grp_sc)) {
+        if (!grp_open || grp_abr != st.abr || grp_prog != cur_prog || grp_mset != st.mset || grp_sprite != cur_sprite ||
+            memcmp(grp_sc, sc, sizeof grp_sc)) {
             close_group();
             o = &ops[nops++];
             o->blend = HWR_BLEND_NONE;
             o->prog = (uint8_t)cur_prog;
-            o->pass = 1; o->mset = (uint8_t)st.mset;
+            o->pass = 1; o->mset = (uint8_t)st.mset; o->sprite = (uint8_t)cur_sprite;
             o->sx0 = sc[0]; o->sy0 = sc[1]; o->sx1 = sc[2]; o->sy1 = sc[3];
             o->first = nv; o->count = 0;
             o->bx0 = o->by0 = 32767; o->bx1 = o->by1 = -32768;
-            grp_open = 1; grp_abr = st.abr; grp_prog = cur_prog; grp_mset = st.mset; memcpy(grp_sc, sc, sizeof grp_sc);
+            grp_open = 1; grp_abr = st.abr; grp_prog = cur_prog; grp_mset = st.mset; grp_sprite = cur_sprite; memcpy(grp_sc, sc, sizeof grp_sc);
             gx0 = gy0 = 1e9f; gx1 = gy1 = -1e9f;
             gb[0] = gb[1] = 32767; gb[2] = gb[3] = -32768;
         }
@@ -266,6 +269,7 @@ static int take_snapshot(void)
     int i;
     static const int full[4] = { 0, 0, 1024, 512 };
     hwr_vtx keep;
+    int ks;
     if (frame_overflow) return 0;
     if (!full_mode && frame_snaps >= MAXSNAPS) { frame_overflow = 1; hwr_stats.overflow_frames++; return 0; }
     submit();                      /* draws queued so far use the previous snapshot */
@@ -275,6 +279,7 @@ static int take_snapshot(void)
     snapped = 1;
     /* copy areas written outside the GPU path (uploads, copies, fills) into the upscaled target */
     keep = tmpl;                   /* the caller's primitive keeps its texture setup */
+    ks = cur_sprite; cur_sprite = 0;
     memset(&tmpl, 0, sizeof tmpl);
     tmpl.mode = 4;
     for (i = 0; i < ndirty; i++) {
@@ -285,7 +290,7 @@ static int take_snapshot(void)
         emit(q, 6, 0, 0, full);
     }
     ndirty = 0;
-    tmpl = keep;
+    tmpl = keep; cur_sprite = ks;
     return 1;
 }
 
@@ -406,6 +411,7 @@ static void tex_setup(int textured, int raw, int cx, int cy, int umin, int umax,
 {
     int mode = st.depth == 0 ? 1 : st.depth == 1 ? 2 : 3;
     memset(&tmpl, 0, sizeof tmpl);
+    cur_sprite = 0;                /* do_rect sets it after this */
     if (!textured) return;
     tmpl.mode = (int16_t)mode;
     tmpl.raw = raw ? 1 : 0;
@@ -664,6 +670,7 @@ static void do_rect(const uint32_t *l, const uint32_t *end)
         int ua = st.flipx ? u0 - w + 1 : u0, va = st.flipy ? v0 - h + 1 : v0, uw = w, vh = h;
         if (ua < 0 || va < 0) { ua = va = 0; uw = vh = 256; }    /* wraps below 0: whole page */
         tex_setup(tex, raw, cx, cy, ua, ua + uw - 1, va, va + vh - 1, ta, ca);
+        cur_sprite = 1;
         if (!prepare(tex, ta[0], ta[1], ta[2], ta[3], ca[0], ca[1], ca[2])) return;
     }
     if (!mask_prepare(t, 6, sc)) return;

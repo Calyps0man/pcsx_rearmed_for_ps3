@@ -59,18 +59,24 @@ static u8 *frames; static u32 frames_off;
 static u32 *ovl; static u32 ovl_off; static int ovl_full_flush = 1;
 
 static rsxVertexProgram *vp; static void *vp_ucode;
-static rsxFragmentProgram *fp_blit, *fp_fxaa, *fp_blitd, *fp_fxaad;
+static rsxFragmentProgram *fp_blit, *fp_fxaa, *fp_blitd, *fp_fxaad, *fp_sharp, *fp_sharpd;
+/* + with the Colour setting's matrix (blit, blitd, sharp, sharpd), and the picture
+   filters of post.fcg (POST_* - 1) */
+enum { POST_CRT = 1, POST_CRT_FLAT, POST_SCANLINES, POST_LCD, POST_DEDITHER, POST_SHARPEN, POST_N = POST_SHARPEN };
+static rsxFragmentProgram *fp_col[4], *fp_post[POST_N];
+static u32 fp_col_off[4], fp_post_off[POST_N];
+static float cmat[3][4];   /* the Colour setting's matrix, by columns (colour_matrix) */
 static int fxaa_test(void);
 static void bind_texture(u32 unit, u8 location, u32 offset, unsigned w, unsigned h, u32 pitch, int linear, int swap_rb);
 static void quad_clip(float X0, float Y0, float X1, float Y1, float u0, float v0, float u1, float v1,
                       float tx, float ty, int prog);
-static u32 fp_blit_off, fp_fxaa_off, fp_blitd_off, fp_fxaad_off, blit_unit, fxaa_unit;
+static u32 fp_blit_off, fp_fxaa_off, fp_blitd_off, fp_fxaad_off, fp_sharp_off, fp_sharpd_off, blit_unit, fxaa_unit;
 /* dithering of the RSX renderer's picture (video_set_dither): PS1 pixels per
    texture unit of the game texture; quick: menu redraws skip the smoothing */
 static int dith_on, quick; static float dith_nw, dith_nh;
 
 /* vertex slots in RSX memory: per display buffer, up to 4 quads per frame */
-#define QUAD_FLOATS 32   /* 4 vertices * (pos2 + uv2 + texel2 + native2) */
+#define QUAD_FLOATS 80   /* 4 vertices * (pos2 + uv2 + texel2 + native2 + 3 colour matrix columns of 4) */
 #define QUADS 8          /* per display buffer and frame */
 static float *vbuf; static u32 vbuf_off; static int quad_n;
 
@@ -154,6 +160,25 @@ int video_init(void)
         fp_fxaad = (rsxFragmentProgram *)fxaad_fpo;
         if (!(fp_blitd_off = load_fp(fp_blitd, &ub)) || !(fp_fxaad_off = load_fp(fp_fxaad, &uf))) return 0;
         if (ub != blit_unit || uf != fxaa_unit) logf_("video: dithering programs use other texture units (%u %u)\n", ub, uf);
+    }
+    {   /* the sharp bilinear picture filter (+ dithering): the plain copy's sampler */
+        u32 us, ud;
+        fp_sharp = (rsxFragmentProgram *)sharp_fpo;
+        fp_sharpd = (rsxFragmentProgram *)sharpd_fpo;
+        if (!(fp_sharp_off = load_fp(fp_sharp, &us)) || !(fp_sharpd_off = load_fp(fp_sharpd, &ud))) return 0;
+        if (us != blit_unit || ud != blit_unit) logf_("video: sharp bilinear programs use other texture units (%u %u)\n", us, ud);
+    }
+    {   /* the Colour variants and the picture filters: the plain copy's sampler */
+        static const unsigned char *col[4] = { blitc_fpo, blitdc_fpo, sharpc_fpo, sharpdc_fpo };
+        static const unsigned char *post[POST_N] = { post1_fpo, post2_fpo, post3_fpo, post4_fpo, post5_fpo, post6_fpo };
+        u32 u; int i;
+        for (i = 0; i < 4 + POST_N; i++) {
+            rsxFragmentProgram **f = i < 4 ? &fp_col[i] : &fp_post[i - 4];
+            u32 *o = i < 4 ? &fp_col_off[i] : &fp_post_off[i - 4];
+            *f = (rsxFragmentProgram *)(i < 4 ? col[i] : post[i - 4]);
+            if (!(*o = load_fp(*f, &u))) return 0;
+            if (u != blit_unit) logf_("video: picture program %d uses another texture unit (%u)\n", i, u);
+        }
     }
 
     if (!fxaa_test()) {
@@ -430,12 +455,20 @@ void video_set_dither(int on, float native_w, float native_h) { dith_on = on; di
 void video_redraw_quick(int on) { quick = on; }
 
 /* clip-space rectangle <- texture rectangle (normalised). prog: bit 0 FXAA, bit 1
-   PS1 dithering (the texture is the game picture: dith_nw/nh give PS1 pixels) */
+   PS1 dithering (the texture is the game picture: dith_nw/nh give PS1 pixels), bit 2
+   sharp bilinear (not with FXAA; the texture bound bilinear), bit 4 the Colour
+   setting's matrix (cmat; not with FXAA), bits 8..10 a picture filter of post.fcg
+   (POST_*, alone; tx, ty: the size of a PS1 pixel, sharpen: of a texel; the "native"
+   coordinates 0..1 across the picture; always with the matrix) */
 static void quad_clip(float X0, float Y0, float X1, float Y1, float u0, float v0, float u1, float v1,
                       float tx, float ty, int prog)
 {
-    int fxaa = prog & 1, dith = (prog & 2) != 0;
+    int fxaa = prog & 1, dith = (prog & 2) != 0, sharp = (prog & 4) != 0, post = (prog >> 8) & 7;
+    int col = (prog & 16) || post;
     float n0 = u0 * dith_nw, n1 = u1 * dith_nw, m0 = v0 * dith_nh, m1 = v1 * dith_nh;
+    static const float ident[3][4] = { { 1.f, 0.f, 0.f, 0.f }, { 0.f, 1.f, 0.f, 0.f }, { 0.f, 0.f, 1.f, 0.f } };
+    const float (*c)[4] = col ? (const float (*)[4])cmat : ident;
+    if (post) { n0 = m0 = 0.f; n1 = m1 = 1.f; }
     float *q;
     u32 off;
     int slot = cur * QUADS + quad_n;
@@ -444,22 +477,40 @@ static void quad_clip(float X0, float Y0, float X1, float Y1, float u0, float v0
     q = vbuf + slot * QUAD_FLOATS;
     off = vbuf_off + slot * QUAD_FLOATS * sizeof(float);
     {
-        float v[QUAD_FLOATS] = {
-            X0, Y0, u0, v0, tx, ty, n0, m0,   X1, Y0, u1, v0, tx, ty, n1, m0,
-            X0, Y1, u0, v1, tx, ty, n0, m1,   X1, Y1, u1, v1, tx, ty, n1, m1 };
-        memcpy(q, v, sizeof v);
+        float v[4][8] = {
+            { X0, Y0, u0, v0, tx, ty, n0, m0 }, { X1, Y0, u1, v0, tx, ty, n1, m0 },
+            { X0, Y1, u0, v1, tx, ty, n0, m1 }, { X1, Y1, u1, v1, tx, ty, n1, m1 } };
+        int k;
+        for (k = 0; k < 4; k++) {
+            memcpy(q + k * 20, v[k], sizeof v[k]);
+            memcpy(q + k * 20 + 8, c, 12 * sizeof(float));
+        }
     }
     __asm__ volatile("sync" : : : "memory");
     rsxInvalidateVertexCache(rsx_ctx);
-    rsxBindVertexArrayAttrib(rsx_ctx, GCM_VERTEX_ATTRIB_POS,  0, off,     32, 2, GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
-    rsxBindVertexArrayAttrib(rsx_ctx, GCM_VERTEX_ATTRIB_TEX0, 0, off + 8, 32, 2, GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
-    rsxBindVertexArrayAttrib(rsx_ctx, GCM_VERTEX_ATTRIB_TEX1, 0, off + 16, 32, 2, GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
-    rsxBindVertexArrayAttrib(rsx_ctx, GCM_VERTEX_ATTRIB_TEX2, 0, off + 24, 32, 2, GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
+    rsxBindVertexArrayAttrib(rsx_ctx, GCM_VERTEX_ATTRIB_POS,  0, off,     80, 2, GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
+    rsxBindVertexArrayAttrib(rsx_ctx, GCM_VERTEX_ATTRIB_TEX0, 0, off + 8, 80, 2, GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
+    rsxBindVertexArrayAttrib(rsx_ctx, GCM_VERTEX_ATTRIB_TEX1, 0, off + 16, 80, 2, GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
+    rsxBindVertexArrayAttrib(rsx_ctx, GCM_VERTEX_ATTRIB_TEX2, 0, off + 24, 80, 2, GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
+    rsxBindVertexArrayAttrib(rsx_ctx, GCM_VERTEX_ATTRIB_TEX3, 0, off + 32, 80, 4, GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
+    rsxBindVertexArrayAttrib(rsx_ctx, GCM_VERTEX_ATTRIB_TEX4, 0, off + 48, 80, 4, GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
+    rsxBindVertexArrayAttrib(rsx_ctx, GCM_VERTEX_ATTRIB_TEX5, 0, off + 64, 80, 4, GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
     rsxLoadVertexProgram(rsx_ctx, vp, vp_ucode);
     video_vp_epoch++;          /* the hardware renderer reloads its own program */
     if (fxaa) rsxLoadFragmentProgramLocation(rsx_ctx, dith ? fp_fxaad : fp_fxaa, dith ? fp_fxaad_off : fp_fxaa_off, GCM_LOCATION_RSX);
+    else if (post) rsxLoadFragmentProgramLocation(rsx_ctx, fp_post[post - 1], fp_post_off[post - 1], GCM_LOCATION_RSX);
+    else if (col) {
+        int i = (sharp ? 2 : 0) + dith;
+        rsxLoadFragmentProgramLocation(rsx_ctx, fp_col[i], fp_col_off[i], GCM_LOCATION_RSX);
+    }
+    else if (sharp) rsxLoadFragmentProgramLocation(rsx_ctx, dith ? fp_sharpd : fp_sharp, dith ? fp_sharpd_off : fp_sharp_off, GCM_LOCATION_RSX);
     else rsxLoadFragmentProgramLocation(rsx_ctx, dith ? fp_blitd : fp_blit, dith ? fp_blitd_off : fp_blit_off, GCM_LOCATION_RSX);
     rsxDrawVertexArray(rsx_ctx, GCM_TYPE_TRIANGLE_STRIP, 0, 4);
+    /* the matrix columns off again: nothing else reads them, and the hardware
+       renderer's draws must not fetch past this small buffer */
+    rsxBindVertexArrayAttrib(rsx_ctx, GCM_VERTEX_ATTRIB_TEX3, 0, 0, 0, 0, GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
+    rsxBindVertexArrayAttrib(rsx_ctx, GCM_VERTEX_ATTRIB_TEX4, 0, 0, 0, 0, GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
+    rsxBindVertexArrayAttrib(rsx_ctx, GCM_VERTEX_ATTRIB_TEX5, 0, 0, 0, 0, GCM_VERTEX_DATA_TYPE_F32, GCM_LOCATION_RSX);
 }
 
 /* screen rectangle (pixels) <- texture rectangle (normalised) */
@@ -566,7 +617,7 @@ static void quad(float x0, float y0, float x1, float y1, float u0, float v0, flo
 
 /* 0: not possible this frame (the caller draws the picture another way) */
 static int draw_spu_aa(u8 loc, u32 off, unsigned tw, unsigned th, u32 pitch,
-                       float u0, float v0, float u1, float v1, int swap_rb, float x0, float y0, float x1, float y1, int d)
+                       float u0, float v0, float u1, float v1, int swap_rb, float x0, float y0, float x1, float y1, int d, int cf)
 {
     unsigned W = ((unsigned)(x1 - x0 + 0.5f)) & ~3u, H = (unsigned)(y1 - y0 + 0.5f);
     int shown_out = 0;
@@ -578,13 +629,13 @@ static int draw_spu_aa(u8 loc, u32 off, unsigned tw, unsigned th, u32 pitch,
         if (r < 0) logf_("video: SPU smoothing missed the RSX's label\n");
         if (r > 0 && sa.w == W && sa.h == H) {
             bind_texture(blit_unit, GCM_LOCATION_CELL, sa.off + sa.size, W, H, AA_PITCH, 0, swap_rb);
-            quad(x0, y0, x0 + W, y0 + H, 0.f, 0.f, 1.f, 1.f, 1.f / W, 1.f / H, 0);
+            quad(x0, y0, x0 + W, y0 + H, 0.f, 0.f, 1.f, 1.f, 1.f / W, 1.f / H, cf);
             shown_out = 1;
         }
     }
     if (!shown_out) {
         bind_texture(blit_unit, loc, off, tw, th, pitch, 1, swap_rb);
-        quad(x0, y0, x1, y1, u0, v0, u1, v1, 1.f / tw, 1.f / th, d);
+        quad(x0, y0, x1, y1, u0, v0, u1, v1, 1.f / tw, 1.f / th, d | cf);
     }
     /* this frame, scaled to the screen, into IN for the SPUs (channels as they are) */
     sa_surface(W, H);
@@ -647,11 +698,52 @@ static void clip_to_screen(float *x0, float *y0, float *x1, float *y1, float *u0
 static int border_dirty = 3, drew_game, drew_other;   /* frames whose borders still need clearing: one per display buffer */
 static float last_rect[4];
 
+/* cmat for the Colour setting (columns); 0 for Normal (no matrix needed).
+   Colour-blind modes: daltonisation, the colours the viewer cannot tell apart
+   shifted into ones they can: M = I + E (I - S), S the simulation of the deficiency
+   (Vienot, Brettel and Mollon 1999, as commonly used), E moving the lost difference
+   into the channels the viewer sees */
+static int colour_matrix(void)
+{
+    static int last = -1;
+    int m = cfg.colour, i, j, k;
+    if (m == last) return m != COLOUR_NORMAL;
+    last = m;
+    {
+        float r[3][3] = { { 1.f, 0.f, 0.f }, { 0.f, 1.f, 0.f }, { 0.f, 0.f, 1.f } };   /* rows */
+        static const float grey[3] = { 0.299f, 0.587f, 0.114f };
+        if (m == COLOUR_VIVID || m == COLOUR_GREY) {   /* saturation 1.35 / 0 around the luma */
+            float s = m == COLOUR_VIVID ? 1.35f : 0.f;
+            for (i = 0; i < 3; i++) for (j = 0; j < 3; j++) r[i][j] = grey[j] * (1.f - s) + (i == j ? s : 0.f);
+        } else if (m == COLOUR_SEPIA) {
+            static const float sep[3][3] = { { 0.393f, 0.769f, 0.189f }, { 0.349f, 0.686f, 0.168f }, { 0.272f, 0.534f, 0.131f } };
+            memcpy(r, sep, sizeof r);
+        } else if (m >= COLOUR_PROTAN && m <= COLOUR_TRITAN) {
+            static const float sim[3][3][3] = {
+                { { 0.11238f, 0.88762f, 0.f }, { 0.11238f, 0.88762f, 0.f }, { 0.00401f, -0.00401f, 1.f } },   /* protanopia */
+                { { 0.29275f, 0.70725f, 0.f }, { 0.29275f, 0.70725f, 0.f }, { -0.02234f, 0.02234f, 1.f } },   /* deuteranopia */
+                { { 1.f, 0.14461f, -0.14461f }, { 0.f, 0.85924f, 0.14076f }, { 0.f, 0.85924f, 0.14076f } } }; /* tritanopia */
+            static const float shift[2][3][3] = {
+                { { 0.f, 0.f, 0.f }, { 0.7f, 1.f, 0.f }, { 0.7f, 0.f, 1.f } },     /* red-green: lost red into green, blue */
+                { { 1.f, 0.f, 0.7f }, { 0.f, 1.f, 0.7f }, { 0.f, 0.f, 0.f } } };   /* blue-yellow: lost blue into red, green */
+            const float (*S)[3] = sim[m - COLOUR_PROTAN], (*E)[3] = shift[m == COLOUR_TRITAN];
+            for (i = 0; i < 3; i++) for (j = 0; j < 3; j++) {
+                float a = 0.f;
+                for (k = 0; k < 3; k++) a += E[i][k] * ((k == j ? 1.f : 0.f) - S[k][j]);
+                r[i][j] = (i == j ? 1.f : 0.f) + a;
+            }
+        }
+        for (j = 0; j < 3; j++) { for (i = 0; i < 3; i++) cmat[j][i] = r[i][j]; cmat[j][3] = 0.f; }
+    }
+    return m != COLOUR_NORMAL;
+}
+
 static void draw_game_texture(u8 loc, u32 off, unsigned tw, unsigned th, u32 pitch,
                               float u0, float v0, float u1, float v1, int swap_rb, int dither)
 {
     float x0, y0, x1, y1;
     int fxaa = cfg.filter == FILTER_FXAA && !quick, linear = cfg.filter != FILTER_SHARP, d = dither ? 2 : 0;
+    int cf = colour_matrix() ? 16 : 0;     /* the Colour setting (not Normal) */
     {
         float shown, c;
         game_rect(&x0, &y0, &x1, &y1, &shown);
@@ -667,18 +759,19 @@ static void draw_game_texture(u8 loc, u32 off, unsigned tw, unsigned th, u32 pit
     if (border_dirty) video_clear(0xff000000);
     else video_reset_state();
     if (cfg.filter == FILTER_FXAA_SPU && !quick) {
-        if (draw_spu_aa(loc, off, tw, th, pitch, u0, v0, u1, v1, swap_rb, x0, y0, x1, y1, d)) return;
+        if (draw_spu_aa(loc, off, tw, th, pitch, u0, v0, u1, v1, swap_rb, x0, y0, x1, y1, d, cf)) return;
         fxaa = !spu_aa_available();    /* SPUs unavailable: FXAA on the RSX; busy: plain this frame */
     }
     if (fxaa) {
         /* source pixels covered by the picture */
         unsigned sw = (unsigned)((u1 - u0) * tw + 0.5f), sh = (unsigned)((v1 - v0) * th + 0.5f);
-        if ((float)sw * sh > 0.6f * (x1 - x0) * (y1 - y0)) {
+        if ((float)sw * sh > 0.6f * (x1 - x0) * (y1 - y0) && !cf) {
             /* the source has nearly as many pixels as the screen picture or more
                (3x/4x, 14:9 at 2x): FXAA straight onto the screen, on the bilinearly
                scaled picture, in one pass with offsets of one screen pixel. (FXAA at
                source resolution into a buffer costs that buffer's pixels plus a second
-               full-screen pass: only worth it for a much smaller source.) */
+               full-screen pass: only worth it for a much smaller source.) With a Colour
+               setting the buffer instead: its copy to the screen applies the matrix */
             bind_texture(fxaa_unit, loc, off, tw, th, pitch, 1, swap_rb);
             quad(x0, y0, x1, y1, u0, v0, u1, v1, (u1 - u0) / (x1 - x0), (v1 - v0) / (y1 - y0), 1 | d);
             return;
@@ -689,12 +782,26 @@ static void draw_game_texture(u8 loc, u32 off, unsigned tw, unsigned th, u32 pit
             quad_clip(-1.f, 1.f, 1.f, -1.f, u0, v0, u1, v1, 1.f / tw, 1.f / th, 1 | d);
             video_reset_state();
             bind_texture(blit_unit, GCM_LOCATION_RSX, fx_off, FX_W, FX_H, FX_W * 4, 1, 0);
-            quad(x0, y0, x1, y1, 0.f, 0.f, (float)sw / FX_W, (float)sh / FX_H, 1.f / FX_W, 1.f / FX_H, 0);
+            quad(x0, y0, x1, y1, 0.f, 0.f, (float)sw / FX_W, (float)sh / FX_H, 1.f / FX_W, 1.f / FX_H, cf);
             return;
         }
     }
     bind_texture(fxaa ? fxaa_unit : blit_unit, loc, off, tw, th, pitch, linear, swap_rb);
-    quad(x0, y0, x1, y1, u0, v0, u1, v1, 1.f / tw, 1.f / th, fxaa | d);
+    {   /* the picture filters of post.fcg (no dithering: they replace it or smooth it away) */
+        int post = cfg.filter == FILTER_CRT ? POST_CRT : cfg.filter == FILTER_CRT_FLAT ? POST_CRT_FLAT :
+                   cfg.filter == FILTER_SCANLINES ? POST_SCANLINES : cfg.filter == FILTER_LCD ? POST_LCD :
+                   cfg.filter == FILTER_DEDITHER ? POST_DEDITHER : cfg.filter == FILTER_SHARPEN ? POST_SHARPEN : 0;
+        if (post && !quick) {
+            /* PS1 pixels per texture unit: the RSX renderer's picture (video_set_dither),
+               or the software renderer's frame itself; sharpen works on texels */
+            float nw = loc == GCM_LOCATION_RSX ? dith_nw : (float)tw, nh = loc == GCM_LOCATION_RSX ? dith_nh : (float)th;
+            if (post == POST_SHARPEN) { nw = (float)tw; nh = (float)th; }
+            quad(x0, y0, x1, y1, u0, v0, u1, v1, 1.f / nw, 1.f / nh, post << 8);
+            return;
+        }
+    }
+    /* (FXAA without its buffer has no Colour variant: then the colours stay) */
+    quad(x0, y0, x1, y1, u0, v0, u1, v1, 1.f / tw, 1.f / th, fxaa | d | (cfg.filter == FILTER_SHARP_BILINEAR ? 4 : 0) | (fxaa ? 0 : cf));
 }
 
 void video_draw_frame(const void *pix, unsigned w, unsigned h, size_t pitch)
